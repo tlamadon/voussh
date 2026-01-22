@@ -48,6 +48,8 @@ func main() {
 	switch cmd {
 	case "login":
 		cmdLogin(args)
+	case "logout":
+		cmdLogout()
 	case "status":
 		cmdStatus()
 	case "ssh":
@@ -66,6 +68,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  login   Login and obtain SSH certificate")
+	fmt.Println("  logout  Remove SSH certificate and clear config")
 	fmt.Println("  status  Show current login status")
 	fmt.Println("  ssh     SSH to a host using certificate")
 	fmt.Println("  pubkey  Get CA public key from server")
@@ -217,6 +220,32 @@ func openBrowser(url string) {
 		return
 	}
 	cmd.Run()
+}
+
+func cmdLogout() {
+	homeDir, _ := os.UserHomeDir()
+	certPath := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
+	configPath := filepath.Join(vshDir, "config")
+
+	// Remove certificate
+	if err := os.Remove(certPath); err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Printf("Failed to remove certificate: %v\n", err)
+		}
+	} else {
+		fmt.Println("Certificate removed")
+	}
+
+	// Remove server config
+	if err := os.Remove(configPath); err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Printf("Failed to remove config: %v\n", err)
+		}
+	} else {
+		fmt.Println("Server config cleared")
+	}
+
+	fmt.Println("Logged out successfully")
 }
 
 func cmdStatus() {

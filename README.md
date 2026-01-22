@@ -63,6 +63,9 @@ vsh login --server http://localhost:8080 --role admin
 # Check certificate status
 vsh status
 
+# Logout and remove certificate
+vsh logout
+
 # SSH to a host using your certificate
 vsh ssh user@hostname
 
