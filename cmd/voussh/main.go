@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
@@ -37,11 +38,19 @@ type TLSConfig struct {
 	KeyFile  string `yaml:"key"`
 }
 
+type sessionData struct {
+	cliPort string
+	role    string
+	pubkey  string
+}
+
 var (
 	config       Config
 	caSigner     ssh.Signer
 	oauth2Config *oauth2.Config
 	oidcVerifier *oidc.IDTokenVerifier
+	sessions     = make(map[string]*sessionData)
+	sessionsMu   sync.RWMutex
 )
 
 func main() {
@@ -165,21 +174,32 @@ func cmdInit(args []string) {
 	fmt.Printf("  Public key:  %s\n", pubKeyPath)
 }
 
-// State encodes: randomBytes_cliPort_role_pubkey
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	cliPort := r.URL.Query().Get("cli_port")
 	role := r.URL.Query().Get("role")
 	pubkey := r.URL.Query().Get("pubkey")
 
-	// Build state: random_port_role_pubkey
+	// Generate a short state token and store session data server-side
 	state := generateState()
-	if cliPort != "" {
-		state += "_" + cliPort
-	} else {
-		state += "_"
+
+	sessionsMu.Lock()
+	sessions[state] = &sessionData{
+		cliPort: cliPort,
+		role:    role,
+		pubkey:  pubkey,
 	}
-	state += "_" + role
-	state += "_" + pubkey
+	sessionsMu.Unlock()
+
+	// Clean up old sessions after 10 minutes
+	go func() {
+		time.Sleep(10 * time.Minute)
+		sessionsMu.Lock()
+		delete(sessions, state)
+		sessionsMu.Unlock()
+	}()
+
+	log.Printf("Login request - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkey))
+	log.Printf("Generated state: %s", state)
 
 	authURL := oauth2Config.AuthCodeURL(state)
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
@@ -192,21 +212,30 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse state: random_port_role_pubkey
+	// Retrieve session data from state
 	state := r.URL.Query().Get("state")
-	parts := strings.SplitN(state, "_", 4)
-	var cliPort, role, pubkeyB64 string
-	if len(parts) >= 2 {
-		cliPort = parts[1]
-	}
-	if len(parts) >= 3 {
-		role = parts[2]
-	}
-	if len(parts) >= 4 {
-		pubkeyB64 = parts[3]
+	log.Printf("Callback state received: %s", state)
+
+	sessionsMu.RLock()
+	session, ok := sessions[state]
+	sessionsMu.RUnlock()
+
+	if !ok {
+		http.Error(w, "Invalid or expired state", http.StatusBadRequest)
+		log.Printf("Session not found for state: %s", state)
+		return
 	}
 
-	log.Printf("Callback received - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkeyB64))
+	// Clean up session
+	sessionsMu.Lock()
+	delete(sessions, state)
+	sessionsMu.Unlock()
+
+	cliPort := session.cliPort
+	role := session.role
+	pubkeyB64 := session.pubkey
+
+	log.Printf("Retrieved from session - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkeyB64))
 
 	ctx := r.Context()
 	token, err := oauth2Config.Exchange(ctx, code)
