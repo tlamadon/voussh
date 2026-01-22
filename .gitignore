@@ -1,0 +1,34 @@
+# Binaries
+voussh
+vsh
+*.exe
+
+# Private keys (IMPORTANT: Never commit these!)
+ca_key
+*.key
+*.pem
+
+# Certificates (usually temporary)
+*-cert.pub
+
+# User config directory
+.vsh/
+
+# Go build artifacts
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage.txt
+coverage.html

@@ -1,0 +1,18 @@
+addr: ":8080"
+ca_key: "./ca_key"
+cert_validity: 8h
+
+client_id: "xxx.apps.googleusercontent.com"
+client_secret: "xxx"
+redirect_url: "http://localhost:8080/callback"
+
+groups:
+  admin:
+    principals: [root, admin]
+  dev:
+    principals: [deploy, developer]
+
+users:
+  alice@example.com: [admin]
+  bob@example.com: [dev]
+  charlie@example.com: [dev, admin]
