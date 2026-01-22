@@ -1,39 +1,25 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"encoding/base64"
 	"flag"
 	"fmt"
-	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
-	"gopkg.in/yaml.v3"
+	"golang.org/x/crypto/ssh"
 )
 
 var (
 	serverURL string
 	vshDir    string
 )
-
-type Target struct {
-	Host        string   `yaml:"host"`
-	User        string   `yaml:"user"`
-	Port        int      `yaml:"port"`
-	Groups      []string `yaml:"groups"`
-	Description string   `yaml:"description"`
-	ProxyCommand string  `yaml:"proxy_command,omitempty"`
-}
-
-type TargetsConfig struct {
-	Targets map[string]Target `yaml:"targets"`
-}
 
 func init() {
 	homeDir, _ := os.UserHomeDir()
@@ -43,14 +29,14 @@ func init() {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: vsh <command> [options]")
-		fmt.Println("Commands: login, sign, pubkey, status, ssh")
+		printUsage()
 		os.Exit(1)
 	}
 
 	cmd := os.Args[1]
 	args := os.Args[2:]
 
+	// Load server URL from config
 	serverURL = os.Getenv("VSH_SERVER")
 	if serverURL == "" {
 		configPath := filepath.Join(vshDir, "config")
@@ -62,23 +48,33 @@ func main() {
 	switch cmd {
 	case "login":
 		cmdLogin(args)
-	case "sign":
-		cmdSign(args)
-	case "pubkey":
-		cmdPubkey()
 	case "status":
 		cmdStatus()
 	case "ssh":
 		cmdSSH(args)
+	case "pubkey":
+		cmdPubkey()
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
+		printUsage()
 		os.Exit(1)
 	}
+}
+
+func printUsage() {
+	fmt.Println("Usage: vsh <command> [options]")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  login   Login and obtain SSH certificate")
+	fmt.Println("  status  Show current login status")
+	fmt.Println("  ssh     SSH to a host using certificate")
+	fmt.Println("  pubkey  Get CA public key from server")
 }
 
 func cmdLogin(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	server := fs.String("server", serverURL, "Server URL")
+	role := fs.String("role", "", "Role to assume (default: user's default role)")
 	fs.Parse(args)
 
 	if *server == "" {
@@ -87,255 +83,204 @@ func cmdLogin(args []string) {
 	}
 	serverURL = *server
 
-	loginURL := serverURL + "/login"
-	fmt.Printf("Opening browser to: %s\n", loginURL)
-	exec.Command("open", loginURL).Run()
-
-	fmt.Print("Enter token from browser: ")
-	var token string
-	fmt.Scanln(&token)
-
-	tokenPath := filepath.Join(vshDir, "token")
-	if err := os.WriteFile(tokenPath, []byte(token), 0600); err != nil {
-		fmt.Printf("Failed to save token: %v\n", err)
-		os.Exit(1)
-	}
-
-	configPath := filepath.Join(vshDir, "config")
-	if err := os.WriteFile(configPath, []byte(serverURL), 0600); err != nil {
-		fmt.Printf("Failed to save config: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("Login successful!")
-}
-
-func cmdSign(args []string) {
-	if serverURL == "" {
-		fmt.Println("Not logged in. Run: vsh login")
-		os.Exit(1)
-	}
-
+	// Get user's SSH public key
 	homeDir, _ := os.UserHomeDir()
-	keyFile := filepath.Join(homeDir, ".ssh", "id_ed25519.pub")
-	if len(args) > 0 {
-		keyFile = args[0]
-	}
-
-	pubKeyData, err := os.ReadFile(keyFile)
+	pubKeyPath := filepath.Join(homeDir, ".ssh", "id_ed25519.pub")
+	pubKeyData, err := os.ReadFile(pubKeyPath)
 	if err != nil {
-		fmt.Printf("Failed to read key file: %v\n", err)
+		fmt.Printf("Failed to read SSH public key (%s): %v\n", pubKeyPath, err)
+		fmt.Println("Please generate an SSH key with: ssh-keygen -t ed25519")
 		os.Exit(1)
 	}
 
-	tokenPath := filepath.Join(vshDir, "token")
-	token, err := os.ReadFile(tokenPath)
+	// Base64 encode the public key for URL safety
+	pubKeyB64 := base64.RawURLEncoding.EncodeToString(pubKeyData)
+
+	// Start local callback server
+	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		fmt.Println("Not logged in. Run: vsh login")
+		fmt.Printf("Failed to start local server: %v\n", err)
 		os.Exit(1)
 	}
 
-	reqBody, _ := json.Marshal(map[string]string{
-		"public_key": string(pubKeyData),
+	port := listener.Addr().(*net.TCPAddr).Port
+	resultChan := make(chan loginResult, 1)
+
+	server_mux := http.NewServeMux()
+	httpServer := &http.Server{Handler: server_mux}
+
+	server_mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		certB64 := r.URL.Query().Get("cert")
+		roleReturned := r.URL.Query().Get("role")
+
+		if certB64 == "" {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<!DOCTYPE html>
+<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
+<h2 style="color: #c00;">Login Failed</h2>
+<p>No certificate received.</p>
+</body></html>`)
+			resultChan <- loginResult{err: fmt.Errorf("no certificate received")}
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
+<h2 style="color: #0a0;">Login Successful!</h2>
+<p>You can close this window and return to your terminal.</p>
+</body></html>`)
+
+		resultChan <- loginResult{cert: certB64, role: roleReturned}
 	})
 
-	req, _ := http.NewRequest("POST", serverURL+"/sign", bytes.NewReader(reqBody))
-	req.Header.Set("Authorization", "Bearer "+string(token))
-	req.Header.Set("Content-Type", "application/json")
+	go httpServer.Serve(listener)
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		fmt.Printf("Request failed: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Sign failed: %s\n", string(body))
-		os.Exit(1)
+	// Build login URL with parameters
+	loginURL := fmt.Sprintf("%s/login?cli_port=%d&pubkey=%s", serverURL, port, pubKeyB64)
+	if *role != "" {
+		loginURL += "&role=" + *role
 	}
 
-	certFile := strings.TrimSuffix(keyFile, ".pub") + "-cert.pub"
-	if err := os.WriteFile(certFile, body, 0644); err != nil {
-		fmt.Printf("Failed to write certificate: %v\n", err)
+	fmt.Println("Opening browser for authentication...")
+	openBrowser(loginURL)
+	fmt.Printf("Waiting for authentication (listening on localhost:%d)...\n", port)
+
+	// Wait for result
+	select {
+	case result := <-resultChan:
+		httpServer.Close()
+		if result.err != nil {
+			fmt.Printf("Login failed: %v\n", result.err)
+			os.Exit(1)
+		}
+
+		// Decode and save certificate
+		certData, err := base64.RawURLEncoding.DecodeString(result.cert)
+		if err != nil {
+			fmt.Printf("Failed to decode certificate: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Write certificate to ~/.ssh/id_ed25519-cert.pub
+		certPath := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
+		if err := os.WriteFile(certPath, certData, 0644); err != nil {
+			fmt.Printf("Failed to save certificate: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Save server config
+		configPath := filepath.Join(vshDir, "config")
+		os.WriteFile(configPath, []byte(serverURL), 0600)
+
+		fmt.Printf("Login successful! Role: %s\n", result.role)
+		fmt.Printf("Certificate saved to: %s\n", certPath)
+
+	case <-time.After(5 * time.Minute):
+		httpServer.Close()
+		fmt.Println("Login timeout. Please try again.")
 		os.Exit(1)
 	}
-
-	fmt.Printf("Certificate written to: %s\n", certFile)
 }
 
-func cmdPubkey() {
-	if serverURL == "" {
-		fmt.Println("Not logged in. Run: vsh login")
-		os.Exit(1)
-	}
+type loginResult struct {
+	cert string
+	role string
+	err  error
+}
 
-	resp, err := http.Get(serverURL + "/pubkey")
-	if err != nil {
-		fmt.Printf("Request failed: %v\n", err)
-		os.Exit(1)
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		fmt.Printf("Please open this URL in your browser:\n%s\n", url)
+		return
 	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Print(string(body))
+	cmd.Run()
 }
 
 func cmdStatus() {
-	tokenPath := filepath.Join(vshDir, "token")
-	token, err := os.ReadFile(tokenPath)
+	homeDir, _ := os.UserHomeDir()
+	certPath := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
+
+	certData, err := os.ReadFile(certPath)
 	if err != nil {
-		fmt.Println("Not logged in")
+		fmt.Println("No SSH certificate found. Run: vsh login")
 		return
 	}
 
-	verifier := &oidc.IDTokenVerifier{}
-	parsedToken, _ := verifier.Verify(nil, string(token))
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey(certData)
+	if err != nil {
+		fmt.Println("Invalid certificate. Run: vsh login")
+		return
+	}
 
-	if parsedToken != nil {
-		var claims struct {
-			Email string `json:"email"`
-			Exp   int64  `json:"exp"`
-		}
-		parsedToken.Claims(&claims)
+	cert, ok := pubKey.(*ssh.Certificate)
+	if !ok {
+		fmt.Println("Not a certificate. Run: vsh login")
+		return
+	}
 
-		if claims.Email != "" {
-			fmt.Printf("Logged in as %s\n", claims.Email)
-			if claims.Exp > 0 {
-				expiry := time.Unix(claims.Exp, 0)
-				remaining := time.Until(expiry)
-				if remaining > 0 {
-					fmt.Printf("Token expires in %v\n", remaining.Round(time.Minute))
-				} else {
-					fmt.Println("Token has expired")
-				}
-			}
+	// Parse KeyId (format: email@role)
+	keyId := cert.KeyId
+	email := keyId
+	role := ""
+	if idx := strings.LastIndex(keyId, "@"); idx != -1 {
+		// Check if it looks like an email (has @ before another @)
+		firstAt := strings.Index(keyId, "@")
+		if firstAt != idx {
+			email = keyId[:idx]
+			role = keyId[idx+1:]
 		}
+	}
+
+	fmt.Printf("Logged in as: %s\n", email)
+	if role != "" {
+		fmt.Printf("Role: %s\n", role)
+	}
+	fmt.Printf("Principals: %s\n", strings.Join(cert.ValidPrincipals, ", "))
+
+	validAfter := time.Unix(int64(cert.ValidAfter), 0)
+	validBefore := time.Unix(int64(cert.ValidBefore), 0)
+	remaining := time.Until(validBefore)
+
+	if remaining > 0 {
+		fmt.Printf("Valid: %s to %s (%v remaining)\n",
+			validAfter.Format("15:04"),
+			validBefore.Format("15:04"),
+			remaining.Round(time.Minute))
 	} else {
-		tokenStr := string(token)
-		parts := strings.Split(tokenStr, ".")
-		if len(parts) == 3 {
-			payload := parts[1]
-			if len(payload)%4 != 0 {
-				payload += strings.Repeat("=", 4-len(payload)%4)
-			}
-			decoded, _ := base64URLDecode(payload)
-			var claims map[string]interface{}
-			if json.Unmarshal(decoded, &claims) == nil {
-				if email, ok := claims["email"].(string); ok {
-					fmt.Printf("Logged in as %s\n", email)
-				}
-				if exp, ok := claims["exp"].(float64); ok {
-					expiry := time.Unix(int64(exp), 0)
-					remaining := time.Until(expiry)
-					if remaining > 0 {
-						fmt.Printf("Token expires in %v\n", remaining.Round(time.Minute))
-					} else {
-						fmt.Println("Token has expired")
-					}
-				}
-			}
-		}
+		fmt.Println("Certificate has expired. Run: vsh login")
 	}
-}
-
-func base64URLDecode(s string) ([]byte, error) {
-	b := []byte(s)
-	for i := range b {
-		switch b[i] {
-		case '-':
-			b[i] = '+'
-		case '_':
-			b[i] = '/'
-		}
-	}
-	dst := make([]byte, len(b))
-	n, err := base64.StdEncoding.Decode(dst, b)
-	return dst[:n], err
-}
-
-var base64 = struct {
-	StdEncoding *base64Encoding
-}{
-	StdEncoding: &base64Encoding{},
-}
-
-type base64Encoding struct{}
-
-func (e *base64Encoding) Decode(dst, src []byte) (n int, err error) {
-	var val uint32
-	var valb int
-	di := 0
-
-	for _, b := range src {
-		var c byte
-		switch {
-		case b >= 'A' && b <= 'Z':
-			c = b - 'A'
-		case b >= 'a' && b <= 'z':
-			c = b - 'a' + 26
-		case b >= '0' && b <= '9':
-			c = b - '0' + 52
-		case b == '+':
-			c = 62
-		case b == '/':
-			c = 63
-		case b == '=':
-			continue
-		default:
-			continue
-		}
-
-		val = (val << 6) | uint32(c)
-		valb += 6
-
-		for valb >= 8 {
-			valb -= 8
-			if di < len(dst) {
-				dst[di] = byte(val >> uint(valb))
-				di++
-			}
-		}
-	}
-
-	return di, nil
 }
 
 func cmdSSH(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: vsh ssh <target>")
-		fmt.Println("\nAvailable targets:")
-		listTargets()
+		fmt.Println("Usage: vsh ssh [user@]host [ssh-options...]")
 		os.Exit(1)
 	}
 
-	targetName := args[0]
-	sshArgs := args[1:]
+	// Check certificate exists and is valid
+	homeDir, _ := os.UserHomeDir()
+	certPath := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
+	keyPath := filepath.Join(homeDir, ".ssh", "id_ed25519")
 
-	targets, err := loadTargets()
-	if err != nil {
-		fmt.Printf("Failed to load targets: %v\n", err)
+	if _, err := os.Stat(certPath); err != nil {
+		fmt.Println("No SSH certificate found. Run: vsh login")
 		os.Exit(1)
 	}
 
-	target, exists := targets.Targets[targetName]
-	if !exists {
-		fmt.Printf("Unknown target: %s\n", targetName)
-		fmt.Println("\nAvailable targets:")
-		listTargets()
-		os.Exit(1)
-	}
+	// Build SSH command
+	sshArgs := []string{"-i", keyPath}
+	sshArgs = append(sshArgs, args...)
 
-	if !hasAccessToTarget(target) {
-		fmt.Printf("Access denied: you don't have permission to access %s\n", targetName)
-		os.Exit(1)
-	}
-
-	ensureCertificate()
-
-	sshCommand := buildSSHCommand(target, sshArgs)
-	cmd := exec.Command("ssh", sshCommand...)
+	cmd := exec.Command("ssh", sshArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -349,147 +294,20 @@ func cmdSSH(args []string) {
 	}
 }
 
-func loadTargets() (*TargetsConfig, error) {
-	targetsFile := os.Getenv("VSH_TARGETS")
-	if targetsFile == "" {
-		targetsFile = "targets.yaml"
-	}
-
-	data, err := os.ReadFile(targetsFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read targets file: %w", err)
-	}
-
-	var config TargetsConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse targets file: %w", err)
-	}
-
-	return &config, nil
-}
-
-func listTargets() {
-	targets, err := loadTargets()
-	if err != nil {
-		return
-	}
-
-	userGroups := getUserGroups()
-
-	for name, target := range targets.Targets {
-		if hasAccessToTargetWithGroups(target, userGroups) {
-			fmt.Printf("  %-20s %s@%s:%d - %s\n",
-				name, target.User, target.Host, target.Port, target.Description)
-		}
-	}
-}
-
-func hasAccessToTarget(target Target) bool {
-	userGroups := getUserGroups()
-	return hasAccessToTargetWithGroups(target, userGroups)
-}
-
-func hasAccessToTargetWithGroups(target Target, userGroups []string) bool {
-	if len(target.Groups) == 0 {
-		return true
-	}
-
-	for _, targetGroup := range target.Groups {
-		for _, userGroup := range userGroups {
-			if targetGroup == userGroup {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func getUserGroups() []string {
-	groupsFile := filepath.Join(vshDir, "groups")
-
-	if data, err := os.ReadFile(groupsFile); err == nil {
-		var userInfo struct {
-			Groups []string `json:"groups"`
-			Expiry time.Time `json:"expiry"`
-		}
-		if json.Unmarshal(data, &userInfo) == nil {
-			if time.Now().Before(userInfo.Expiry) {
-				return userInfo.Groups
-			}
-		}
-	}
-
+func cmdPubkey() {
 	if serverURL == "" {
-		return nil
+		fmt.Println("Server not configured. Run: vsh login --server <URL>")
+		os.Exit(1)
 	}
 
-	tokenPath := filepath.Join(vshDir, "token")
-	token, err := os.ReadFile(tokenPath)
+	resp, err := http.Get(serverURL + "/pubkey")
 	if err != nil {
-		return nil
-	}
-
-	req, _ := http.NewRequest("GET", serverURL+"/userinfo", nil)
-	req.Header.Set("Authorization", "Bearer "+string(token))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil
+		fmt.Printf("Request failed: %v\n", err)
+		os.Exit(1)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var userInfo struct {
-		Email  string   `json:"email"`
-		Groups []string `json:"groups"`
-	}
-
-	if err := json.Unmarshal(body, &userInfo); err != nil {
-		return nil
-	}
-
-	cacheData := struct {
-		Groups []string  `json:"groups"`
-		Expiry time.Time `json:"expiry"`
-	}{
-		Groups: userInfo.Groups,
-		Expiry: time.Now().Add(1 * time.Hour),
-	}
-
-	if cacheJSON, err := json.Marshal(cacheData); err == nil {
-		os.WriteFile(groupsFile, cacheJSON, 0600)
-	}
-
-	return userInfo.Groups
-}
-
-func ensureCertificate() {
-	homeDir, _ := os.UserHomeDir()
-	certFile := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
-
-	if _, err := os.Stat(certFile); err != nil {
-		fmt.Println("SSH certificate not found. Signing your SSH key...")
-		cmdSign([]string{})
-	}
-}
-
-func buildSSHCommand(target Target, extraArgs []string) []string {
-	var args []string
-
-	args = append(args, "-p", fmt.Sprintf("%d", target.Port))
-
-	if target.ProxyCommand != "" && target.ProxyCommand != "none" {
-		args = append(args, "-o", fmt.Sprintf("ProxyCommand=%s", target.ProxyCommand))
-	}
-
-	args = append(args, fmt.Sprintf("%s@%s", target.User, target.Host))
-
-	args = append(args, extraArgs...)
-
-	return args
+	buf := make([]byte, 4096)
+	n, _ := resp.Body.Read(buf)
+	fmt.Print(string(buf[:n]))
 }
