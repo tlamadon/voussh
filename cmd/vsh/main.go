@@ -142,6 +142,9 @@ func cmdLogin(args []string) {
 		loginURL += "&role=" + *role
 	}
 
+	fmt.Printf("DEBUG: CLI listening on port: %d\n", port)
+	fmt.Printf("DEBUG: Public key base64 length: %d\n", len(pubKeyB64))
+
 	// Warn about HSTS for Tailscale domains
 	if strings.HasPrefix(loginURL, "http://") && strings.Contains(loginURL, ".ts.net") {
 		fmt.Println("⚠️  Warning: Tailscale domains (.ts.net) require HTTPS due to browser HSTS policies.")

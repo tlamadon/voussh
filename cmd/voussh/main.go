@@ -54,17 +54,39 @@ var (
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
+	configFile := "config.yaml"
+
+	// Parse command-line arguments
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch arg {
 		case "init":
-			cmdInit(os.Args[2:])
+			cmdInit(os.Args[i+1:])
 			return
+		case "--config", "-c":
+			if i+1 < len(os.Args) {
+				configFile = os.Args[i+1]
+				i++ // Skip next arg as it's the config file path
+			} else {
+				log.Fatal("--config requires a file path")
+			}
+		case "--help", "-h":
+			fmt.Println("Usage: voussh [options]")
+			fmt.Println("       voussh init [keyfile]")
+			fmt.Println()
+			fmt.Println("Options:")
+			fmt.Println("  --config, -c <file>  Path to config file (default: config.yaml)")
+			fmt.Println("  --help, -h           Show this help message")
+			fmt.Println()
+			fmt.Println("Commands:")
+			fmt.Println("  init [keyfile]       Generate a new CA key pair")
+			os.Exit(0)
 		}
 	}
 
-	configData, err := os.ReadFile("config.yaml")
+	configData, err := os.ReadFile(configFile)
 	if err != nil {
-		log.Fatal("Failed to read config.yaml:", err)
+		log.Fatalf("Failed to read config file %s: %v", configFile, err)
 	}
 
 	if err := yaml.Unmarshal(configData, &config); err != nil {
@@ -87,13 +109,12 @@ func main() {
 		log.Fatal("Failed to create OIDC provider:", err)
 	}
 
-	// Automatically adjust redirect URL scheme based on TLS configuration
+	// Use the redirect URL as configured (no automatic adjustment)
 	redirectURL := config.RedirectURL
 	if config.TLS != nil && config.TLS.CertFile != "" && config.TLS.KeyFile != "" {
-		// If TLS is configured but redirect URL uses http, update it to https
+		// Just log a warning if there's a potential mismatch
 		if strings.HasPrefix(redirectURL, "http://") {
-			redirectURL = "https://" + strings.TrimPrefix(redirectURL, "http://")
-			log.Printf("TLS enabled: using redirect URL %s", redirectURL)
+			log.Printf("WARNING: TLS enabled but redirect URL uses http://. Make sure this is registered in Google OAuth.")
 		}
 	}
 
@@ -104,6 +125,13 @@ func main() {
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{oidc.ScopeOpenID, "email"},
 	}
+
+	clientIDPreview := config.ClientID
+	if len(clientIDPreview) > 20 {
+		clientIDPreview = clientIDPreview[:20] + "..."
+	}
+	log.Printf("OAuth configured with ClientID: %s (length: %d)", clientIDPreview, len(config.ClientID))
+	log.Printf("Using redirect URL: %s", redirectURL)
 
 	oidcVerifier = provider.Verifier(&oidc.Config{
 		ClientID: config.ClientID,
@@ -175,9 +203,15 @@ func cmdInit(args []string) {
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
+	// Log the full request URL for debugging
+	log.Printf("Login request URL: %s", r.URL.String())
+	log.Printf("Login request query params: %v", r.URL.Query())
+
 	cliPort := r.URL.Query().Get("cli_port")
 	role := r.URL.Query().Get("role")
 	pubkey := r.URL.Query().Get("pubkey")
+
+	log.Printf("Extracted params - cliPort: '%s', role: '%s', pubkey length: %d", cliPort, role, len(pubkey))
 
 	// Generate a short state token and store session data server-side
 	state := generateState()
@@ -188,6 +222,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		role:    role,
 		pubkey:  pubkey,
 	}
+	sessionCount := len(sessions)
 	sessionsMu.Unlock()
 
 	// Clean up old sessions after 10 minutes
@@ -198,8 +233,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		sessionsMu.Unlock()
 	}()
 
-	log.Printf("Login request - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkey))
-	log.Printf("Generated state: %s", state)
+	log.Printf("Stored session with state: %s (total sessions: %d)", state, sessionCount)
+	log.Printf("Session data stored - cliPort: '%s', role: '%s', pubkey length: %d", cliPort, role, len(pubkey))
 
 	authURL := oauth2Config.AuthCodeURL(state)
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
@@ -216,13 +251,18 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	log.Printf("Callback state received: %s", state)
 
+	// Debug: List all current sessions
 	sessionsMu.RLock()
+	log.Printf("Current sessions count: %d", len(sessions))
+	for k := range sessions {
+		log.Printf("  Session state: %s", k)
+	}
 	session, ok := sessions[state]
 	sessionsMu.RUnlock()
 
 	if !ok {
 		http.Error(w, "Invalid or expired state", http.StatusBadRequest)
-		log.Printf("Session not found for state: %s", state)
+		log.Printf("Session not found for state: %s (looking in %d sessions)", state, len(sessions))
 		return
 	}
 
