@@ -142,9 +142,20 @@ func cmdLogin(args []string) {
 		loginURL += "&role=" + *role
 	}
 
+	// Warn about HSTS for Tailscale domains
+	if strings.HasPrefix(loginURL, "http://") && strings.Contains(loginURL, ".ts.net") {
+		fmt.Println("⚠️  Warning: Tailscale domains (.ts.net) require HTTPS due to browser HSTS policies.")
+		fmt.Println("   Your browser will automatically redirect to HTTPS even though you specified HTTP.")
+		fmt.Println("   Either configure TLS on the server or use localhost/IP address instead.")
+		fmt.Println()
+	}
+
 	fmt.Println("Opening browser for authentication...")
+	fmt.Printf("Login URL: %s\n", loginURL)
 	openBrowser(loginURL)
-	fmt.Printf("Waiting for authentication (listening on localhost:%d)...\n", port)
+	fmt.Printf("Waiting for callback on localhost:%d...\n", port)
+	fmt.Println("Note: The callback only works if the browser is on the same machine as this CLI.")
+	fmt.Println("      If using remote/Tailscale access, you may need to manually copy the certificate from the browser.")
 
 	// Wait for result
 	select {
@@ -298,6 +309,11 @@ func cmdPubkey() {
 	if serverURL == "" {
 		fmt.Println("Server not configured. Run: vsh login --server <URL>")
 		os.Exit(1)
+	}
+
+	// Warn about potential HSTS issues
+	if strings.HasPrefix(serverURL, "http://") && strings.Contains(serverURL, ".ts.net") {
+		fmt.Println("Note: If this fails, try using the server's IP address instead of .ts.net domain")
 	}
 
 	resp, err := http.Get(serverURL + "/pubkey")

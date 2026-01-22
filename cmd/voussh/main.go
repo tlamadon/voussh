@@ -78,10 +78,20 @@ func main() {
 		log.Fatal("Failed to create OIDC provider:", err)
 	}
 
+	// Automatically adjust redirect URL scheme based on TLS configuration
+	redirectURL := config.RedirectURL
+	if config.TLS != nil && config.TLS.CertFile != "" && config.TLS.KeyFile != "" {
+		// If TLS is configured but redirect URL uses http, update it to https
+		if strings.HasPrefix(redirectURL, "http://") {
+			redirectURL = "https://" + strings.TrimPrefix(redirectURL, "http://")
+			log.Printf("TLS enabled: using redirect URL %s", redirectURL)
+		}
+	}
+
 	oauth2Config = &oauth2.Config{
 		ClientID:     config.ClientID,
 		ClientSecret: config.ClientSecret,
-		RedirectURL:  config.RedirectURL,
+		RedirectURL:  redirectURL,
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{oidc.ScopeOpenID, "email"},
 	}
@@ -196,6 +206,8 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		pubkeyB64 = parts[3]
 	}
 
+	log.Printf("Callback received - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkeyB64))
+
 	ctx := r.Context()
 	token, err := oauth2Config.Exchange(ctx, code)
 	if err != nil {
@@ -280,23 +292,38 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	if cliPort != "" {
 		redirectURL := fmt.Sprintf("http://localhost:%s/callback?token=%s&role=%s&cert=%s",
 			cliPort, url.QueryEscape(rawIDToken), url.QueryEscape(role), certB64)
+		log.Printf("Redirecting to CLI at: %s", redirectURL)
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		return
 	}
+	log.Printf("No CLI port provided, showing device flow")
 
-	// Device flow: display info
+	// Device flow: display certificate for manual copy
 	w.Header().Set("Content-Type", "text/html")
+	certDisplay := ""
+	if certB64 != "" {
+		if certData, err := base64.RawURLEncoding.DecodeString(certB64); err == nil {
+			certDisplay = fmt.Sprintf(`
+<div style="margin-top: 20px; padding: 15px; background: #f5f5f5; border-radius: 5px;">
+<h3>Certificate (for manual setup if callback failed):</h3>
+<p style="font-size: 12px; color: #666;">If the CLI didn't receive the certificate automatically, save this to ~/.ssh/id_ed25519-cert.pub:</p>
+<textarea readonly style="width: 100%%; height: 200px; font-family: monospace; font-size: 12px;" onclick="this.select()">%s</textarea>
+</div>`, string(certData))
+		}
+	}
+
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head><title>VSH Login</title></head>
-<body style="font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
+<body style="font-family: system-ui, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px;">
 <h2>Login Successful</h2>
 <p>Logged in as: %s</p>
 <p>Role: %s</p>
 <p>Principals: %s</p>
-<p style="color: #666;">You can close this window.</p>
+%s
+<p style="color: #666; margin-top: 20px;">You can close this window.</p>
 </body>
-</html>`, claims.Email, role, strings.Join(principals, ", "))
+</html>`, claims.Email, role, strings.Join(principals, ", "), certDisplay)
 }
 
 func signCertificate(pubKey ssh.PublicKey, email, role string, principals []string) (*ssh.Certificate, error) {
