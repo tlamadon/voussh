@@ -30,23 +30,25 @@ jobs:
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
       run: |
         output_name="voussh-${{ matrix.goos }}-${{ matrix.goarch }}"
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output_name="${output_name}.exe"
         fi
-        go build -o "./bin/${output_name}" ./cmd/voussh
+        go build -ldflags="-s -w -extldflags '-static'" -o "./bin/${output_name}" ./cmd/voussh
 
     - name: Build vsh
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
       run: |
         output_name="vsh-${{ matrix.goos }}-${{ matrix.goarch }}"
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output_name="${output_name}.exe"
         fi
-        go build -o "./bin/${output_name}" ./cmd/vsh
+        go build -ldflags="-s -w -extldflags '-static'" -o "./bin/${output_name}" ./cmd/vsh
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
