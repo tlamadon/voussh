@@ -14,12 +14,26 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"gopkg.in/yaml.v3"
 )
 
 var (
 	serverURL string
 	vshDir    string
 )
+
+type Target struct {
+	Host        string   `yaml:"host"`
+	User        string   `yaml:"user"`
+	Port        int      `yaml:"port"`
+	Groups      []string `yaml:"groups"`
+	Description string   `yaml:"description"`
+	ProxyCommand string  `yaml:"proxy_command,omitempty"`
+}
+
+type TargetsConfig struct {
+	Targets map[string]Target `yaml:"targets"`
+}
 
 func init() {
 	homeDir, _ := os.UserHomeDir()
@@ -30,7 +44,7 @@ func init() {
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: vsh <command> [options]")
-		fmt.Println("Commands: login, sign, pubkey, status")
+		fmt.Println("Commands: login, sign, pubkey, status, ssh")
 		os.Exit(1)
 	}
 
@@ -54,6 +68,8 @@ func main() {
 		cmdPubkey()
 	case "status":
 		cmdStatus()
+	case "ssh":
+		cmdSSH(args)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -284,4 +300,196 @@ func (e *base64Encoding) Decode(dst, src []byte) (n int, err error) {
 	}
 
 	return di, nil
+}
+
+func cmdSSH(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: vsh ssh <target>")
+		fmt.Println("\nAvailable targets:")
+		listTargets()
+		os.Exit(1)
+	}
+
+	targetName := args[0]
+	sshArgs := args[1:]
+
+	targets, err := loadTargets()
+	if err != nil {
+		fmt.Printf("Failed to load targets: %v\n", err)
+		os.Exit(1)
+	}
+
+	target, exists := targets.Targets[targetName]
+	if !exists {
+		fmt.Printf("Unknown target: %s\n", targetName)
+		fmt.Println("\nAvailable targets:")
+		listTargets()
+		os.Exit(1)
+	}
+
+	if !hasAccessToTarget(target) {
+		fmt.Printf("Access denied: you don't have permission to access %s\n", targetName)
+		os.Exit(1)
+	}
+
+	ensureCertificate()
+
+	sshCommand := buildSSHCommand(target, sshArgs)
+	cmd := exec.Command("ssh", sshCommand...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Printf("SSH failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func loadTargets() (*TargetsConfig, error) {
+	targetsFile := os.Getenv("VSH_TARGETS")
+	if targetsFile == "" {
+		targetsFile = "targets.yaml"
+	}
+
+	data, err := os.ReadFile(targetsFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read targets file: %w", err)
+	}
+
+	var config TargetsConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse targets file: %w", err)
+	}
+
+	return &config, nil
+}
+
+func listTargets() {
+	targets, err := loadTargets()
+	if err != nil {
+		return
+	}
+
+	userGroups := getUserGroups()
+
+	for name, target := range targets.Targets {
+		if hasAccessToTargetWithGroups(target, userGroups) {
+			fmt.Printf("  %-20s %s@%s:%d - %s\n",
+				name, target.User, target.Host, target.Port, target.Description)
+		}
+	}
+}
+
+func hasAccessToTarget(target Target) bool {
+	userGroups := getUserGroups()
+	return hasAccessToTargetWithGroups(target, userGroups)
+}
+
+func hasAccessToTargetWithGroups(target Target, userGroups []string) bool {
+	if len(target.Groups) == 0 {
+		return true
+	}
+
+	for _, targetGroup := range target.Groups {
+		for _, userGroup := range userGroups {
+			if targetGroup == userGroup {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func getUserGroups() []string {
+	groupsFile := filepath.Join(vshDir, "groups")
+
+	if data, err := os.ReadFile(groupsFile); err == nil {
+		var userInfo struct {
+			Groups []string `json:"groups"`
+			Expiry time.Time `json:"expiry"`
+		}
+		if json.Unmarshal(data, &userInfo) == nil {
+			if time.Now().Before(userInfo.Expiry) {
+				return userInfo.Groups
+			}
+		}
+	}
+
+	if serverURL == "" {
+		return nil
+	}
+
+	tokenPath := filepath.Join(vshDir, "token")
+	token, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return nil
+	}
+
+	req, _ := http.NewRequest("GET", serverURL+"/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+string(token))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var userInfo struct {
+		Email  string   `json:"email"`
+		Groups []string `json:"groups"`
+	}
+
+	if err := json.Unmarshal(body, &userInfo); err != nil {
+		return nil
+	}
+
+	cacheData := struct {
+		Groups []string  `json:"groups"`
+		Expiry time.Time `json:"expiry"`
+	}{
+		Groups: userInfo.Groups,
+		Expiry: time.Now().Add(1 * time.Hour),
+	}
+
+	if cacheJSON, err := json.Marshal(cacheData); err == nil {
+		os.WriteFile(groupsFile, cacheJSON, 0600)
+	}
+
+	return userInfo.Groups
+}
+
+func ensureCertificate() {
+	homeDir, _ := os.UserHomeDir()
+	certFile := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
+
+	if _, err := os.Stat(certFile); err != nil {
+		fmt.Println("SSH certificate not found. Signing your SSH key...")
+		cmdSign([]string{})
+	}
+}
+
+func buildSSHCommand(target Target, extraArgs []string) []string {
+	var args []string
+
+	args = append(args, "-p", fmt.Sprintf("%d", target.Port))
+
+	if target.ProxyCommand != "" && target.ProxyCommand != "none" {
+		args = append(args, "-o", fmt.Sprintf("ProxyCommand=%s", target.ProxyCommand))
+	}
+
+	args = append(args, fmt.Sprintf("%s@%s", target.User, target.Host))
+
+	args = append(args, extraArgs...)
+
+	return args
 }

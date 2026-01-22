@@ -87,6 +87,7 @@ func main() {
 	http.HandleFunc("/callback", handleCallback)
 	http.HandleFunc("/sign", handleSign)
 	http.HandleFunc("/pubkey", handlePubkey)
+	http.HandleFunc("/userinfo", handleUserInfo)
 
 	log.Printf("Server starting on %s", config.Addr)
 	log.Fatal(http.ListenAndServe(config.Addr, nil))
@@ -227,4 +228,41 @@ func generateState() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+func handleUserInfo(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		http.Error(w, "Missing or invalid authorization", http.StatusUnauthorized)
+		return
+	}
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+	idToken, err := oidcVerifier.Verify(r.Context(), tokenString)
+	if err != nil {
+		http.Error(w, "Invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	var claims struct {
+		Email string `json:"email"`
+	}
+	if err := idToken.Claims(&claims); err != nil {
+		http.Error(w, "Failed to parse claims", http.StatusInternalServerError)
+		return
+	}
+
+	groups, ok := config.Users[claims.Email]
+	if !ok {
+		http.Error(w, "User not authorized", http.StatusForbidden)
+		return
+	}
+
+	userInfo := map[string]interface{}{
+		"email":  claims.Email,
+		"groups": groups,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(userInfo)
 }

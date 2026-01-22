@@ -39,6 +39,12 @@ vsh status
 
 # Get CA public key (for server configuration)
 vsh pubkey >> ~/.ssh/authorized_keys
+
+# SSH to a configured target server
+vsh ssh prod-web-01
+
+# List available SSH targets
+vsh ssh
 ```
 
 ### SSH Server Configuration
@@ -56,11 +62,32 @@ systemctl reload sshd
 
 ## Configuration
 
+### Server Configuration
+
 Edit `config.yaml` to:
 - Set Google OAuth credentials
 - Define user groups and their SSH principals
 - Map user emails to groups
 - Configure certificate validity period
+
+### SSH Targets Configuration
+
+Edit `targets.yaml` to:
+- Define SSH target servers with hostnames and ports
+- Set user accounts for each target
+- Configure access groups that can connect to each target
+- Optionally set proxy commands for jump hosts
+
+Example `targets.yaml`:
+```yaml
+targets:
+  prod-web-01:
+    host: web01.prod.example.com
+    user: deploy
+    port: 22
+    groups: [admin, dev]
+    description: Production web server
+```
 
 ## Architecture
 
