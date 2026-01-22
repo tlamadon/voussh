@@ -124,12 +124,6 @@ func main() {
 		Scopes:       []string{oidc.ScopeOpenID, "email"},
 	}
 
-	clientIDPreview := config.ClientID
-	if len(clientIDPreview) > 20 {
-		clientIDPreview = clientIDPreview[:20] + "..."
-	}
-	log.Printf("OAuth configured with ClientID: %s (length: %d)", clientIDPreview, len(config.ClientID))
-	log.Printf("Using redirect URL: %s", redirectURL)
 
 	oidcVerifier = provider.Verifier(&oidc.Config{
 		ClientID: config.ClientID,
@@ -201,14 +195,9 @@ func cmdInit(args []string) {
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-	// Log the full request URL for debugging
-	log.Printf("Login request URL: %s", r.URL.String())
-
 	cliPort := r.URL.Query().Get("cli_port")
 	role := r.URL.Query().Get("role")
 	pubkey := r.URL.Query().Get("pubkey")
-
-	log.Printf("Login params - cliPort: '%s', role: '%s', pubkey length: %d", cliPort, role, len(pubkey))
 
 	// Encode state data as compact JSON, then base64
 	stateData := StateData{
@@ -226,8 +215,6 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Use base64 URL encoding for the state
 	state := base64.RawURLEncoding.EncodeToString(stateJSON)
 
-	log.Printf("Generated state (length %d): %s", len(state), state)
-
 	authURL := oauth2Config.AuthCodeURL(state)
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 }
@@ -241,27 +228,22 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Decode state from base64 JSON
 	state := r.URL.Query().Get("state")
-	log.Printf("Callback state received (length %d)", len(state))
 
 	stateJSON, err := base64.RawURLEncoding.DecodeString(state)
 	if err != nil {
 		http.Error(w, "Invalid state encoding", http.StatusBadRequest)
-		log.Printf("Failed to decode state: %v", err)
 		return
 	}
 
 	var stateData StateData
 	if err := json.Unmarshal(stateJSON, &stateData); err != nil {
 		http.Error(w, "Invalid state format", http.StatusBadRequest)
-		log.Printf("Failed to unmarshal state: %v", err)
 		return
 	}
 
 	cliPort := stateData.Port
 	role := stateData.Role
 	pubkeyB64 := stateData.Pubkey
-
-	log.Printf("Decoded from state - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkeyB64))
 
 	ctx := r.Context()
 	token, err := oauth2Config.Exchange(ctx, code)
@@ -341,17 +323,19 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		certB64 = base64.RawURLEncoding.EncodeToString(ssh.MarshalAuthorizedKey(cert))
+
+		// Log certificate issuance
+		log.Printf("Certificate issued: user=%s, role=%s, principals=[%s]",
+			claims.Email, role, strings.Join(principals, ", "))
 	}
 
 	// Redirect to CLI or show token
 	if cliPort != "" {
 		redirectURL := fmt.Sprintf("http://localhost:%s/callback?token=%s&role=%s&cert=%s",
 			cliPort, url.QueryEscape(rawIDToken), url.QueryEscape(role), certB64)
-		log.Printf("Redirecting to CLI at: %s", redirectURL)
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		return
 	}
-	log.Printf("No CLI port provided, showing device flow")
 
 	// Device flow: display certificate for manual copy
 	w.Header().Set("Content-Type", "text/html")
