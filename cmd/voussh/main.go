@@ -29,6 +29,12 @@ type Config struct {
 	ClientSecret string                         `yaml:"client_secret"`
 	RedirectURL  string                         `yaml:"redirect_url"`
 	Users        map[string]map[string][]string `yaml:"users"` // email -> role -> principals
+	TLS          *TLSConfig                     `yaml:"tls,omitempty"`
+}
+
+type TLSConfig struct {
+	CertFile string `yaml:"cert"`
+	KeyFile  string `yaml:"key"`
 }
 
 var (
@@ -87,9 +93,15 @@ func main() {
 	http.HandleFunc("/login", handleLogin)
 	http.HandleFunc("/callback", handleCallback)
 	http.HandleFunc("/pubkey", handlePubkey)
+	http.HandleFunc("/health", handleHealth)
 
-	log.Printf("Server starting on %s", config.Addr)
-	log.Fatal(http.ListenAndServe(config.Addr, nil))
+	if config.TLS != nil && config.TLS.CertFile != "" && config.TLS.KeyFile != "" {
+		log.Printf("Server starting on https://%s", config.Addr)
+		log.Fatal(http.ListenAndServeTLS(config.Addr, config.TLS.CertFile, config.TLS.KeyFile, nil))
+	} else {
+		log.Printf("Server starting on http://%s", config.Addr)
+		log.Fatal(http.ListenAndServe(config.Addr, nil))
+	}
 }
 
 func cmdInit(args []string) {
@@ -322,6 +334,12 @@ func handlePubkey(w http.ResponseWriter, r *http.Request) {
 	pubKey := caSigner.PublicKey()
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprintf(w, "%s", ssh.MarshalAuthorizedKey(pubKey))
+}
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `{"status":"ok","service":"voussh"}`)
 }
 
 func generateState() string {

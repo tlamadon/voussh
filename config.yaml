@@ -2,6 +2,12 @@ addr: ":8080"
 ca_key: "./ca_key"
 cert_validity: 8h
 
+# Optional TLS configuration
+# Uncomment to enable HTTPS
+# tls:
+#   cert: "./server.crt"
+#   key: "./server.key"
+
 client_id: "xxx.apps.googleusercontent.com"
 client_secret: "xxx"
 redirect_url: "http://localhost:8080/callback"
