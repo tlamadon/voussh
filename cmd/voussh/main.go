@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -12,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
@@ -38,10 +38,10 @@ type TLSConfig struct {
 	KeyFile  string `yaml:"key"`
 }
 
-type sessionData struct {
-	cliPort string
-	role    string
-	pubkey  string
+type StateData struct {
+	Port   string `json:"p,omitempty"`
+	Role   string `json:"r,omitempty"`
+	Pubkey string `json:"k,omitempty"`
 }
 
 var (
@@ -49,8 +49,6 @@ var (
 	caSigner     ssh.Signer
 	oauth2Config *oauth2.Config
 	oidcVerifier *oidc.IDTokenVerifier
-	sessions     = make(map[string]*sessionData)
-	sessionsMu   sync.RWMutex
 )
 
 func main() {
@@ -205,36 +203,30 @@ func cmdInit(args []string) {
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Log the full request URL for debugging
 	log.Printf("Login request URL: %s", r.URL.String())
-	log.Printf("Login request query params: %v", r.URL.Query())
 
 	cliPort := r.URL.Query().Get("cli_port")
 	role := r.URL.Query().Get("role")
 	pubkey := r.URL.Query().Get("pubkey")
 
-	log.Printf("Extracted params - cliPort: '%s', role: '%s', pubkey length: %d", cliPort, role, len(pubkey))
+	log.Printf("Login params - cliPort: '%s', role: '%s', pubkey length: %d", cliPort, role, len(pubkey))
 
-	// Generate a short state token and store session data server-side
-	state := generateState()
-
-	sessionsMu.Lock()
-	sessions[state] = &sessionData{
-		cliPort: cliPort,
-		role:    role,
-		pubkey:  pubkey,
+	// Encode state data as compact JSON, then base64
+	stateData := StateData{
+		Port:   cliPort,
+		Role:   role,
+		Pubkey: pubkey,
 	}
-	sessionCount := len(sessions)
-	sessionsMu.Unlock()
 
-	// Clean up old sessions after 10 minutes
-	go func() {
-		time.Sleep(10 * time.Minute)
-		sessionsMu.Lock()
-		delete(sessions, state)
-		sessionsMu.Unlock()
-	}()
+	stateJSON, err := json.Marshal(stateData)
+	if err != nil {
+		http.Error(w, "Failed to encode state", http.StatusInternalServerError)
+		return
+	}
 
-	log.Printf("Stored session with state: %s (total sessions: %d)", state, sessionCount)
-	log.Printf("Session data stored - cliPort: '%s', role: '%s', pubkey length: %d", cliPort, role, len(pubkey))
+	// Use base64 URL encoding for the state
+	state := base64.RawURLEncoding.EncodeToString(stateJSON)
+
+	log.Printf("Generated state (length %d): %s", len(state), state)
 
 	authURL := oauth2Config.AuthCodeURL(state)
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
@@ -247,35 +239,29 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retrieve session data from state
+	// Decode state from base64 JSON
 	state := r.URL.Query().Get("state")
-	log.Printf("Callback state received: %s", state)
+	log.Printf("Callback state received (length %d)", len(state))
 
-	// Debug: List all current sessions
-	sessionsMu.RLock()
-	log.Printf("Current sessions count: %d", len(sessions))
-	for k := range sessions {
-		log.Printf("  Session state: %s", k)
-	}
-	session, ok := sessions[state]
-	sessionsMu.RUnlock()
-
-	if !ok {
-		http.Error(w, "Invalid or expired state", http.StatusBadRequest)
-		log.Printf("Session not found for state: %s (looking in %d sessions)", state, len(sessions))
+	stateJSON, err := base64.RawURLEncoding.DecodeString(state)
+	if err != nil {
+		http.Error(w, "Invalid state encoding", http.StatusBadRequest)
+		log.Printf("Failed to decode state: %v", err)
 		return
 	}
 
-	// Clean up session
-	sessionsMu.Lock()
-	delete(sessions, state)
-	sessionsMu.Unlock()
+	var stateData StateData
+	if err := json.Unmarshal(stateJSON, &stateData); err != nil {
+		http.Error(w, "Invalid state format", http.StatusBadRequest)
+		log.Printf("Failed to unmarshal state: %v", err)
+		return
+	}
 
-	cliPort := session.cliPort
-	role := session.role
-	pubkeyB64 := session.pubkey
+	cliPort := stateData.Port
+	role := stateData.Role
+	pubkeyB64 := stateData.Pubkey
 
-	log.Printf("Retrieved from session - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkeyB64))
+	log.Printf("Decoded from state - cliPort: %s, role: %s, pubkey length: %d", cliPort, role, len(pubkeyB64))
 
 	ctx := r.Context()
 	token, err := oauth2Config.Exchange(ctx, code)
@@ -438,8 +424,3 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status":"ok","service":"voussh"}`)
 }
 
-func generateState() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return fmt.Sprintf("%x", b)
-}
