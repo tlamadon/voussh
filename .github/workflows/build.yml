@@ -26,16 +26,16 @@ jobs:
       with:
         go-version: '1.22'
 
-    - name: Build vsh-server
+    - name: Build voussh
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
       run: |
-        output_name="vsh-server-${{ matrix.goos }}-${{ matrix.goarch }}"
+        output_name="voussh-${{ matrix.goos }}-${{ matrix.goarch }}"
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output_name="${output_name}.exe"
         fi
-        go build -o "./bin/${output_name}" ./cmd/vsh-server
+        go build -o "./bin/${output_name}" ./cmd/voussh
 
     - name: Build vsh
       env:
