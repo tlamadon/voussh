@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,8 +25,22 @@ var (
 
 func init() {
 	homeDir, _ := os.UserHomeDir()
-	vshDir = filepath.Join(homeDir, ".vsh")
+	configDir, _ := os.UserConfigDir()
+	vshDir = filepath.Join(configDir, "voussh")
 	os.MkdirAll(vshDir, 0700)
+
+	// Migrate old config if it exists
+	oldVshDir := filepath.Join(homeDir, ".vsh")
+	oldConfigPath := filepath.Join(oldVshDir, "config")
+	newConfigPath := filepath.Join(vshDir, "current_server")
+
+	if _, err := os.Stat(oldConfigPath); err == nil {
+		if data, err := os.ReadFile(oldConfigPath); err == nil {
+			os.WriteFile(newConfigPath, data, 0600)
+			addServerToHistory(strings.TrimSpace(string(data)))
+			os.Remove(oldConfigPath)
+		}
+	}
 }
 
 func main() {
@@ -39,7 +55,7 @@ func main() {
 	// Load server URL from config
 	serverURL = os.Getenv("VSH_SERVER")
 	if serverURL == "" {
-		configPath := filepath.Join(vshDir, "config")
+		configPath := filepath.Join(vshDir, "current_server")
 		if data, err := os.ReadFile(configPath); err == nil {
 			serverURL = strings.TrimSpace(string(data))
 		}
@@ -76,15 +92,24 @@ func printUsage() {
 
 func cmdLogin(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	server := fs.String("server", serverURL, "Server URL")
+	server := fs.String("server", "", "Server URL")
 	role := fs.String("role", "", "Role to assume (default: user's default role)")
 	fs.Parse(args)
 
+	// If no server specified, use history or prompt
 	if *server == "" {
-		fmt.Println("Server URL required (use --server or VSH_SERVER env)")
-		os.Exit(1)
+		selectedServer, err := selectServer()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+		*server = selectedServer
 	}
+
 	serverURL = *server
+
+	// Add to server history
+	addServerToHistory(serverURL)
 
 	// Get user's SSH public key
 	homeDir, _ := os.UserHomeDir()
@@ -186,8 +211,8 @@ func cmdLogin(args []string) {
 			os.Exit(1)
 		}
 
-		// Save server config
-		configPath := filepath.Join(vshDir, "config")
+		// Save current server
+		configPath := filepath.Join(vshDir, "current_server")
 		os.WriteFile(configPath, []byte(serverURL), 0600)
 
 		fmt.Printf("Login successful! Role: %s\n", result.role)
@@ -358,4 +383,113 @@ func cmdPubkey() {
 	buf := make([]byte, 4096)
 	n, _ := resp.Body.Read(buf)
 	fmt.Print(string(buf[:n]))
+}
+
+// addServerToHistory adds a server URL to the history file
+func addServerToHistory(serverURL string) {
+	historyPath := filepath.Join(vshDir, "server_history")
+
+	// Read existing history
+	var servers []string
+	if data, err := os.ReadFile(historyPath); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" && line != serverURL {
+				servers = append(servers, line)
+			}
+		}
+	}
+
+	// Add current server to the front
+	servers = append([]string{serverURL}, servers...)
+
+	// Keep only the last 10 servers
+	if len(servers) > 10 {
+		servers = servers[:10]
+	}
+
+	// Write back to file
+	content := strings.Join(servers, "\n")
+	os.WriteFile(historyPath, []byte(content), 0600)
+}
+
+// getServerHistory returns the list of previously used servers
+func getServerHistory() []string {
+	historyPath := filepath.Join(vshDir, "server_history")
+
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		return []string{}
+	}
+
+	var servers []string
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			servers = append(servers, line)
+		}
+	}
+
+	return servers
+}
+
+// selectServer prompts the user to select a server from history or enter a new one
+func selectServer() (string, error) {
+	servers := getServerHistory()
+
+	if len(servers) == 0 {
+		fmt.Print("Enter server URL: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(input), nil
+	}
+
+	if len(servers) == 1 {
+		fmt.Printf("Using server: %s\n", servers[0])
+		return servers[0], nil
+	}
+
+	// Multiple servers - show menu
+	fmt.Println("Select a server:")
+	for i, server := range servers {
+		fmt.Printf("  %d) %s\n", i+1, server)
+	}
+	fmt.Printf("  %d) Enter new server URL\n", len(servers)+1)
+
+	fmt.Print("Choice [1]: ")
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+
+	choice := strings.TrimSpace(input)
+	if choice == "" {
+		choice = "1"
+	}
+
+	choiceNum, err := strconv.Atoi(choice)
+	if err != nil {
+		return "", fmt.Errorf("invalid choice: %s", choice)
+	}
+
+	if choiceNum >= 1 && choiceNum <= len(servers) {
+		return servers[choiceNum-1], nil
+	}
+
+	if choiceNum == len(servers)+1 {
+		fmt.Print("Enter server URL: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(input), nil
+	}
+
+	return "", fmt.Errorf("invalid choice: %d", choiceNum)
 }
