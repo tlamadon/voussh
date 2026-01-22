@@ -6,13 +6,15 @@ client_id: "xxx.apps.googleusercontent.com"
 client_secret: "xxx"
 redirect_url: "http://localhost:8080/callback"
 
-groups:
-  admin:
-    principals: [root, admin]
-  dev:
-    principals: [deploy, developer]
-
+# Users: email -> role -> principals
 users:
-  alice@example.com: [admin]
-  bob@example.com: [dev]
-  charlie@example.com: [dev, admin]
+  alice@example.com:
+    default: [root, admin]
+    deploy: [deploy]
+  bob@example.com:
+    default: [developer]
+    deploy: [deploy]
+  charlie@example.com:
+    default: [developer]
+    admin: [root, admin]
+    deploy: [deploy]
