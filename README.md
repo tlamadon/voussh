@@ -215,47 +215,175 @@ systemctl reload sshd
 
 ##### Using the Flake
 
-The easiest way to use VouSSH on NixOS is through the provided flake:
+The flake provides NixOS and Home Manager modules for easy integration.
+
+**Step 1: Add the flake input to your configuration**
 
 ```nix
-# In your flake.nix
+# In your system flake.nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    voussh.url = "github:yourusername/voussh"; # Replace with your repo
+
+    # Add voussh flake
+    voussh = {
+      url = "github:yourusername/voussh";  # Replace with actual repo
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # For Home Manager users
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, voussh, ... }: {
-    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = [
-        ./configuration.nix
-        ({ pkgs, ... }: {
-          # Install the vsh client
-          environment.systemPackages = [
-            voussh.packages.${pkgs.system}.vsh
-          ];
+  outputs = { self, nixpkgs, voussh, home-manager, ... }: {
+    # Your NixOS configurations here
+  };
+}
+```
 
-          # Configure SSH to trust the VouSSH CA
-          services.openssh = {
-            enable = true;
-            settings = {
-              PubkeyAuthentication = true;
-              TrustedUserCAKeys = "/etc/ssh/trusted-user-ca-keys.pub";
-              PasswordAuthentication = false;
+**Step 2: Configure the Server (NixOS Module)**
+
+Add the voussh module to your server configuration:
+
+```nix
+# In your flake.nix outputs
+{
+  nixosConfigurations.yourserver = nixpkgs.lib.nixosSystem {
+    system = "x86_64-linux";
+    modules = [
+      ./configuration.nix
+      # Import the voussh server module
+      voussh.nixosModules.default
+
+      # Configure the service
+      {
+        services.voussh = {
+          enable = true;
+          settings = {
+            addr = ":8443";
+            cert_validity = "8h";
+            client_id = "your-client-id.apps.googleusercontent.com";
+            client_secret = "your-client-secret";
+            redirect_url = "https://voussh.example.com:8443/callback";
+
+            users = {
+              "alice@example.com" = {
+                default = [ "root" "admin" ];
+                deploy = [ "deploy" ];
+              };
+              "bob@example.com" = {
+                default = [ "developer" ];
+              };
+            };
+
+            # Optional TLS
+            tls = {
+              cert = "/path/to/cert.pem";
+              key = "/path/to/key.pem";
             };
           };
+        };
+      }
+    ];
+  };
+}
+```
 
-          # Add your VouSSH CA public key
-          environment.etc."ssh/trusted-user-ca-keys.pub" = {
-            text = ''
-              ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... voussh-ca
-            '';
-            mode = "0644";
+**Step 3: Configure the Client**
+
+You have three options for client configuration:
+
+**Option A: Home Manager Module (Per-user)**
+
+```nix
+# Add to your flake.nix outputs
+{
+  homeConfigurations."youruser" = home-manager.lib.homeManagerConfiguration {
+    pkgs = nixpkgs.legacyPackages.x86_64-linux;
+    modules = [
+      # Import the vsh client module
+      voussh.homeManagerModules.default
+
+      # Configure the client
+      {
+        programs.vsh = {
+          enable = true;
+          enableShellIntegration = true;  # Adds 'vsh init' to shell
+          defaultServer = "https://voussh.example.com:8443";
+        };
+      }
+    ];
+  };
+}
+```
+
+**Option B: NixOS System-wide with Home Manager**
+
+```nix
+# In your NixOS configuration with home-manager as a module
+{
+  nixosConfigurations.yourdesktop = nixpkgs.lib.nixosSystem {
+    system = "x86_64-linux";
+    modules = [
+      ./configuration.nix
+      home-manager.nixosModules.home-manager
+      {
+        home-manager.users.youruser = {
+          imports = [ voussh.homeManagerModules.default ];
+
+          programs.vsh = {
+            enable = true;
+            enableShellIntegration = true;
+            defaultServer = "https://voussh.example.com:8443";
           };
-        })
-      ];
-    };
+        };
+      }
+    ];
+  };
+}
+```
+
+**Option C: NixOS System Package (without Home Manager)**
+
+```nix
+{
+  nixosConfigurations.yourclient = nixpkgs.lib.nixosSystem {
+    system = "x86_64-linux";
+    modules = [
+      ./configuration.nix
+      {
+        # Install vsh client system-wide
+        environment.systemPackages = [
+          voussh.packages.${pkgs.system}.vsh
+        ];
+
+        # Optionally add shell integration system-wide
+        programs.bash.interactiveShellInit = ''
+          eval "$(vsh init)"
+        '';
+
+        # Configure SSH to trust the VouSSH CA
+        services.openssh = {
+          enable = true;
+          settings = {
+            PubkeyAuthentication = true;
+            TrustedUserCAKeys = "/etc/ssh/trusted-user-ca-keys.pub";
+            PasswordAuthentication = false;
+          };
+        };
+
+        # Add your VouSSH CA public key
+        environment.etc."ssh/trusted-user-ca-keys.pub" = {
+          text = ''
+            ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... voussh-ca
+          '';
+          mode = "0644";
+        };
+      }
+    ];
   };
 }
 ```
@@ -342,6 +470,62 @@ Alternatively, you can fetch the CA key from the voussh server:
   };
 }
 ```
+
+## NixOS Module Reference
+
+### Server Module (`services.voussh`)
+
+The NixOS module provides a complete systemd service for running the VouSSH server.
+
+#### Available Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `services.voussh.enable` | boolean | false | Enable the VouSSH server |
+| `services.voussh.package` | package | voussh | The voussh package to use |
+| `services.voussh.dataDir` | path | /var/lib/voussh | Directory for CA keys |
+| `services.voussh.user` | string | voussh | User to run the service |
+| `services.voussh.group` | string | voussh | Group to run the service |
+| `services.voussh.settings.addr` | string | :8080 | Listen address and port |
+| `services.voussh.settings.ca_key` | string | /var/lib/voussh/ca_key | CA key path |
+| `services.voussh.settings.cert_validity` | string | 8h | Certificate validity |
+| `services.voussh.settings.client_id` | string | required | Google OAuth client ID |
+| `services.voussh.settings.client_secret` | string | required | Google OAuth client secret |
+| `services.voussh.settings.redirect_url` | string | required | OAuth callback URL |
+| `services.voussh.settings.users` | attrset | {} | User role mappings |
+| `services.voussh.settings.tls` | null or attrset | null | TLS configuration |
+
+#### Security Features
+
+The module includes extensive systemd hardening:
+- Runs as non-root user
+- Private tmp directory
+- Read-only system directories
+- No new privileges
+- Restricted system calls
+- Network namespace isolation
+
+### Home Manager Module (`programs.vsh`)
+
+The Home Manager module provides user-level installation and shell integration for the vsh client.
+
+#### Available Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `programs.vsh.enable` | boolean | false | Enable vsh client |
+| `programs.vsh.package` | package | vsh | The vsh package to use |
+| `programs.vsh.enableShellIntegration` | boolean | true | Enable shell function for local sessions |
+| `programs.vsh.defaultServer` | null or string | null | Default VouSSH server URL |
+
+#### Shell Integration
+
+When enabled, automatically configures:
+- Bash: Adds to `.bashrc`
+- Zsh: Adds to `.zshrc`
+- Fish: Adds to `config.fish`
+
+This enables the `vsh login --local` command for shell-specific sessions.
 
 ## Architecture
 
