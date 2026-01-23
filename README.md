@@ -1,6 +1,6 @@
 # VouSSH - OAuth-based SSH Certificate Authority
 
-A stateless, lightweight SSH Certificate Authority that authenticates users via Google OAuth and issues short-lived SSH certificates based on role assignments. Perfect for managing SSH access in modern cloud environments.
+A stateless, lightweight SSH Certificate Authority server and client that authenticates users via Google OAuth and issues short-lived SSH certificates based on role assignments. 
 
 ## Features
 
@@ -11,27 +11,24 @@ A stateless, lightweight SSH Certificate Authority that authenticates users via 
 - 🔧 **Simple setup** - Minimal configuration required
 - 🌐 **HTTPS support** - Optional TLS for secure deployments
 - 🏥 **Health endpoints** - Built-in monitoring support
+- 🔀 **Dual session modes** - Global sessions (persistent) or local sessions (shell-specific)
 
 ## Quick Start
 
 ### Setup
 
-1. Generate a CA key pair:
-   ```bash
-   ./voussh init
-   ```
-
-2. Configure Google OAuth credentials in `config.yaml`
-
-3. Build binaries:
+1. Build binaries:
    ```bash
    go build -o voussh cmd/voussh/main.go
    go build -o vsh cmd/vsh/main.go
    ```
 
+2. Create Google OAuth credentials and save them in `config.yaml`
+
 ### Server (voussh)
 
 ```bash
+
 # Generate CA key pair
 ./voussh init [path]
 
@@ -51,19 +48,90 @@ The server provides:
 - CA public key endpoint: `/pubkey`
 - Health check endpoint: `/health`
 
+### Server Configuration (config.yaml)
+
+```yaml
+addr: ":8080"
+ca_key: "./ca_key"
+cert_validity: 8h
+
+# Optional TLS configuration
+# tls:
+#   cert: "./server.crt"
+#   key: "./server.key"
+
+# Google OAuth credentials
+client_id: "xxx.apps.googleusercontent.com"
+client_secret: "xxx"
+redirect_url: "http://localhost:8080/callback"
+
+# Users: email -> role -> principals
+users:
+  alice@example.com:
+    default: [root, admin]
+    deploy: [deploy]
+  bob@example.com:
+    default: [developer]
+    deploy: [deploy]
+  charlie@example.com:
+    default: [developer]
+    admin: [root, admin]
+    deploy: [deploy]
+```
+
+#### Configuration Fields
+
+| Field | Description |
+|-------|-------------|
+| `addr` | Server listen address |
+| `ca_key` | Path to CA private key (without extension) |
+| `cert_validity` | Certificate validity duration (e.g., `8h`, `24h`) |
+| `client_id` | Google OAuth client ID |
+| `client_secret` | Google OAuth client secret |
+| `redirect_url` | OAuth callback URL |
+| `users` | User authorization mapping |
+
+#### User Configuration
+
+Users are configured with a mapping of email to roles, where each role maps to a list of SSH principals:
+
+```yaml
+users:
+  email@example.com:
+    role_name: [principal1, principal2]
+```
+
+- The `default` role is used when no role is specified during login
+- Users can request any role they have configured
+- Principals determine which usernames can be used when SSHing to servers
+
+
 ### Client (vsh)
 
+#### Optional one-time Setup for local session
+
+Add this to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
 ```bash
-# Login and obtain SSH certificate
+eval "$(vsh init)"
+```
+This creates a shell function that wraps the vsh binary and enables seamless local session management. Ignore this step 
+
+#### Usage
+
+```bash
+# Login and obtain SSH certificate (global session)
 vsh login --server http://localhost:8080
 
 # Login with a specific role
 vsh login --server http://localhost:8080 --role admin
 
+# Create a local session (shell-specific) - no eval needed!
+vsh login --local --server http://localhost:8080
+
 # Check certificate status
 vsh status
 
-# Logout and remove certificate
+# Logout - automatically handles both local and global sessions
 vsh logout
 
 # SSH to a host using your certificate
@@ -76,7 +144,59 @@ vsh ssh user@hostname -L 8080:localhost:80
 vsh pubkey
 ```
 
-### SSH Server Configuration
+### Session Management
+
+The vsh client supports two session modes:
+
+#### Global Sessions (Default)
+- Certificate stored in `~/.ssh/id_ed25519-cert.pub`
+- Persistent across all terminal sessions
+- Shared by all shells on the system
+- Use case: General day-to-day SSH access
+
+```bash
+# Create global session
+vsh login --server http://localhost:8080
+
+# Check status
+vsh status
+# Output: Session type: Global (all shells) - Server: http://localhost:8080
+
+# Remove global session
+vsh logout
+```
+
+#### Local Sessions (Shell-Specific)
+- Certificate stored in environment variable `VSH_LOCAL_CERT`
+- Isolated to current shell session
+- Not visible to other terminals
+- Use case: Temporary access, testing, or when you need different identities in different terminals
+
+```bash
+# After running 'eval "$(vsh init)"' in your shell profile:
+
+# Create local session - simple and clean!
+vsh login --local --server http://localhost:8080
+
+# Check status
+vsh status
+# Output: Session type: Local (shell-specific) - Server: http://localhost:8080
+
+# SSH automatically uses local session when available
+vsh ssh user@hostname
+
+# Remove local session - no eval needed!
+vsh logout
+
+# Manual removal (if not using the shell function):
+unset VSH_LOCAL_CERT VSH_LOCAL_SERVER VSH_LOCAL_ROLE
+```
+
+**How it works**: The `vsh init` command creates a shell function that wraps the vsh binary. This function runs in your shell's process (not a subprocess), so it can directly modify environment variables for local sessions. This eliminates the need for `eval` wrappers during normal usage.
+
+**Session Priority**: When both local and global sessions exist, the local session takes precedence.
+
+### SSH Server Configuration 
 
 #### Traditional Linux Systems
 
@@ -93,7 +213,65 @@ systemctl reload sshd
 
 #### NixOS Configuration
 
-For NixOS systems, add the CA configuration to your system configuration:
+##### Using the Flake
+
+The easiest way to use VouSSH on NixOS is through the provided flake:
+
+```nix
+# In your flake.nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    voussh.url = "github:yourusername/voussh"; # Replace with your repo
+  };
+
+  outputs = { self, nixpkgs, voussh, ... }: {
+    nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        ({ pkgs, ... }: {
+          # Install the vsh client
+          environment.systemPackages = [
+            voussh.packages.${pkgs.system}.vsh
+          ];
+
+          # Configure SSH to trust the VouSSH CA
+          services.openssh = {
+            enable = true;
+            settings = {
+              PubkeyAuthentication = true;
+              TrustedUserCAKeys = "/etc/ssh/trusted-user-ca-keys.pub";
+              PasswordAuthentication = false;
+            };
+          };
+
+          # Add your VouSSH CA public key
+          environment.etc."ssh/trusted-user-ca-keys.pub" = {
+            text = ''
+              ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... voussh-ca
+            '';
+            mode = "0644";
+          };
+        })
+      ];
+    };
+  };
+}
+```
+
+You can also run the client directly from the flake without installation:
+```bash
+# Run vsh directly from the flake
+nix run github:yourusername/voussh#vsh -- login --server https://voussh.example.com
+
+# Or enter a development shell
+nix develop github:yourusername/voussh
+```
+
+##### Manual Configuration
+
+For manual configuration, add the CA configuration to your system configuration:
 
 ```nix
 { config, pkgs, ... }:
@@ -165,65 +343,6 @@ Alternatively, you can fetch the CA key from the voussh server:
 }
 ```
 
-## Configuration
-
-### Server Configuration (config.yaml)
-
-```yaml
-addr: ":8080"
-ca_key: "./ca_key"
-cert_validity: 8h
-
-# Optional TLS configuration
-# tls:
-#   cert: "./server.crt"
-#   key: "./server.key"
-
-# Google OAuth credentials
-client_id: "xxx.apps.googleusercontent.com"
-client_secret: "xxx"
-redirect_url: "http://localhost:8080/callback"
-
-# Users: email -> role -> principals
-users:
-  alice@example.com:
-    default: [root, admin]
-    deploy: [deploy]
-  bob@example.com:
-    default: [developer]
-    deploy: [deploy]
-  charlie@example.com:
-    default: [developer]
-    admin: [root, admin]
-    deploy: [deploy]
-```
-
-#### Configuration Fields
-
-| Field | Description |
-|-------|-------------|
-| `addr` | Server listen address |
-| `ca_key` | Path to CA private key (without extension) |
-| `cert_validity` | Certificate validity duration (e.g., `8h`, `24h`) |
-| `client_id` | Google OAuth client ID |
-| `client_secret` | Google OAuth client secret |
-| `redirect_url` | OAuth callback URL |
-| `users` | User authorization mapping |
-
-#### User Configuration
-
-Users are configured with a mapping of email to roles, where each role maps to a list of SSH principals:
-
-```yaml
-users:
-  email@example.com:
-    role_name: [principal1, principal2]
-```
-
-- The `default` role is used when no role is specified during login
-- Users can request any role they have configured
-- Principals determine which usernames can be used when SSHing to servers
-
 ## Architecture
 
 - **voussh**: Server that handles OAuth flow and signs SSH certificates
@@ -234,11 +353,13 @@ users:
 
 ## How It Works
 
-1. User runs `vsh login --server <url>`
+1. User runs `vsh login --server <url>` (add `--local` for shell-specific session)
 2. Browser opens to Google OAuth
 3. After authentication, the server signs the user's SSH public key
 4. Certificate is returned to the CLI via local callback server
-5. Certificate is saved to `~/.ssh/id_ed25519-cert.pub`
+5. Certificate is either:
+   - Saved to `~/.ssh/id_ed25519-cert.pub` (global session)
+   - Stored in environment variable `VSH_LOCAL_CERT` (local session)
 6. User can now SSH to any server that trusts the CA
 
 ## Deployment
