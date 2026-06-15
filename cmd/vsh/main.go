@@ -89,7 +89,7 @@ func printUsage() {
 	fmt.Println("  login   Login and obtain SSH certificate")
 	fmt.Println("  logout  Remove SSH certificate and clear config")
 	fmt.Println("  status  Show current login status")
-	fmt.Println("  ssh     SSH to a host using certificate")
+	fmt.Println("  ssh     SSH to a host using certificate (use -a for all identities)")
 	fmt.Println("  pubkey  Get CA public key from server")
 }
 
@@ -464,8 +464,23 @@ func cmdStatus() {
 
 func cmdSSH(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: vsh ssh [user@]host [ssh-options...]")
+		fmt.Println("Usage: vsh ssh [-a] [user@]host [ssh-options...]")
+		fmt.Println("  -a  Allow all SSH identities (default: certificate only)")
 		os.Exit(1)
+	}
+
+	// Check for -a flag
+	allIdentities := false
+	if len(args) > 0 && args[0] == "-a" {
+		allIdentities = true
+		args = args[1:] // Remove the flag from args
+
+		// Check again that we have a host after removing the flag
+		if len(args) < 1 {
+			fmt.Println("Usage: vsh ssh [-a] [user@]host [ssh-options...]")
+			fmt.Println("  -a  Allow all SSH identities (default: certificate only)")
+			os.Exit(1)
+		}
 	}
 
 	homeDir, _ := os.UserHomeDir()
@@ -498,6 +513,12 @@ func cmdSSH(args []string) {
 
 		// Build SSH command with temp certificate
 		sshArgs := []string{"-i", keyPath, "-o", "CertificateFile=" + tempCertPath}
+
+		// Add IdentitiesOnly=yes by default to only use the specified identity
+		if !allIdentities {
+			sshArgs = append(sshArgs, "-o", "IdentitiesOnly=yes")
+		}
+
 		sshArgs = append(sshArgs, args...)
 
 		cmd := exec.Command("ssh", sshArgs...)
@@ -522,6 +543,12 @@ func cmdSSH(args []string) {
 
 		// Build SSH command with global certificate
 		sshArgs := []string{"-i", keyPath}
+
+		// Add IdentitiesOnly=yes by default to only use the specified identity
+		if !allIdentities {
+			sshArgs = append(sshArgs, "-o", "IdentitiesOnly=yes")
+		}
+
 		sshArgs = append(sshArgs, args...)
 
 		cmd := exec.Command("ssh", sshArgs...)
