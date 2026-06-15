@@ -1,0 +1,22 @@
+# Secrets and local config — never bake these into the image
+config.yaml
+config2.yaml
+config-local.yaml
+ca_key
+ca_key.pub
+*.key
+*.pem
+*-cert.pub
+
+# Build artifacts
+/voussh
+/vsh
+bin/
+
+# VCS / tooling
+.git
+.github
+.idea
+.vscode
+*.md
+result

@@ -48,6 +48,60 @@ The server provides:
 - CA public key endpoint: `/pubkey`
 - Health check endpoint: `/health`
 
+### Running with Docker
+
+A prebuilt server image is published to GitHub Container Registry on every
+push to `main` and every `v*` tag:
+
+```
+ghcr.io/tlamadon/voussh:latest     # latest main
+ghcr.io/tlamadon/voussh:0.1.0      # a specific release
+```
+
+First, generate the CA key into the directory you'll mount (skip if you already
+have one):
+
+```bash
+docker run --rm -v "$PWD:/data" ghcr.io/tlamadon/voussh:latest init /data/ca_key
+```
+
+Then create a `config.yaml` next to it (see the configuration section below),
+making sure it points at the mounted key and port:
+
+```yaml
+addr: ":8080"
+ca_key: "./ca_key"   # resolves to /data/ca_key inside the container
+# ... client_id, client_secret, redirect_url, users, etc.
+```
+
+#### docker-compose.yml
+
+```yaml
+services:
+  voussh:
+    image: ghcr.io/tlamadon/voussh:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/data/config.yaml:ro
+      - ./ca_key:/data/ca_key:ro
+```
+
+```bash
+docker compose up -d
+docker compose logs -f
+```
+
+The container's working directory is `/data` and it runs `voussh --config
+/data/config.yaml` by default, so both the config and the CA key are expected
+there. The image runs as root so it can read a bind-mounted `ca_key` with
+`0600` permissions; the CA private key never needs to be world-readable.
+
+> **Note:** Mount real TLS certificates (or terminate TLS at a reverse proxy)
+> for any non-local deployment — the CA signs SSH certificates based on OAuth
+> logins, so the endpoint must be trusted.
+
 ### Server Configuration (config.yaml)
 
 ```yaml
