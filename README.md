@@ -223,6 +223,9 @@ vsh ssh user@hostname -L 8080:localhost:80
 
 # Get CA public key (for server configuration)
 vsh pubkey
+
+# Show version
+vsh version
 ```
 
 ### Session Management

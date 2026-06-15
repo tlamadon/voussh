@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/voussh/voussh/internal/version"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -51,6 +52,11 @@ func main() {
 
 	cmd := os.Args[1]
 	args := os.Args[2:]
+
+	if cmd == "version" || cmd == "--version" || cmd == "-v" {
+		fmt.Printf("vsh %s\n", version.String())
+		return
+	}
 
 	// Load server URL from config
 	serverURL = os.Getenv("VSH_SERVER")
@@ -91,6 +97,7 @@ func printUsage() {
 	fmt.Println("  status  Show current login status")
 	fmt.Println("  ssh     SSH to a host using certificate (use -a for all identities)")
 	fmt.Println("  pubkey  Get CA public key from server")
+	fmt.Println("  version Show vsh version")
 }
 
 func cmdInit() {

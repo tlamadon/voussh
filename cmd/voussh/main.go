@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
+	"github.com/voussh/voussh/internal/version"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -78,6 +80,9 @@ func main() {
 		case "init":
 			cmdInit(os.Args[i+1:])
 			return
+		case "--version", "-v":
+			fmt.Printf("voussh %s\n", version.String())
+			os.Exit(0)
 		case "--config", "-c":
 			if i+1 < len(os.Args) {
 				configFile = os.Args[i+1]
@@ -91,6 +96,7 @@ func main() {
 			fmt.Println()
 			fmt.Println("Options:")
 			fmt.Println("  --config, -c <file>  Path to config file (default: config.yaml)")
+			fmt.Println("  --version, -v        Show version")
 			fmt.Println("  --help, -h           Show this help message")
 			fmt.Println()
 			fmt.Println("Commands:")
@@ -341,8 +347,16 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		certB64 = base64.RawURLEncoding.EncodeToString(ssh.MarshalAuthorizedKey(cert))
 
 		// Log certificate issuance
-		log.Printf("Certificate issued: user=%s, role=%s, principals=[%s]",
-			claims.Email, role, strings.Join(principals, ", "))
+		validUntil := time.Unix(int64(cert.ValidBefore), 0)
+		exts := make([]string, 0, len(cert.Permissions.Extensions))
+		for name := range cert.Permissions.Extensions {
+			exts = append(exts, name)
+		}
+		sort.Strings(exts)
+		log.Printf("Certificate issued: user=%s, role=%s, principals=[%s], validity=%s (until %s), extensions=[%s]",
+			claims.Email, role, strings.Join(principals, ", "),
+			time.Until(validUntil).Round(time.Second), validUntil.Format(time.RFC3339),
+			strings.Join(exts, ", "))
 	}
 
 	// Redirect to CLI or show token
