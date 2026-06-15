@@ -172,6 +172,23 @@ users:
 | `redirect_url` | OAuth callback URL |
 | `users` | User authorization mapping |
 
+#### Live config reload
+
+The server watches the config file and automatically reloads it when it
+changes — no restart needed for policy changes. Each reload is logged:
+
+```
+Config reloaded from config.yaml (3 users, 2 roles)
+```
+
+Hot-reloaded fields: `users`, `cert_validity`, `extensions`, and `roles`.
+These take effect on the next certificate issued.
+
+Changes to `addr`, `tls`, `ca_key`, or the OAuth settings (`client_id`,
+`client_secret`, `redirect_url`) still require a restart — the server logs a
+warning telling you so. If the edited file is invalid, the reload is skipped
+and the previous config is kept (also logged).
+
 #### User Configuration
 
 Users are configured with a mapping of email to roles, where each role maps to a list of SSH principals:

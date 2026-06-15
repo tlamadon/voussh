@@ -14,6 +14,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
@@ -64,11 +65,92 @@ type StateData struct {
 }
 
 var (
-	config       Config
+	configPtr    atomic.Pointer[Config] // hot-reloadable config; read via currentConfig()
 	caSigner     ssh.Signer
 	oauth2Config *oauth2.Config
 	oidcVerifier *oidc.IDTokenVerifier
 )
+
+// currentConfig returns the active configuration. The returned pointer is
+// immutable — a reload swaps in a brand-new *Config rather than mutating it,
+// so callers can read its fields without locking.
+func currentConfig() *Config {
+	return configPtr.Load()
+}
+
+// loadConfig reads and parses the config file.
+func loadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// watchConfig polls the config file and hot-reloads policy fields (users,
+// roles, cert_validity, extensions) when it changes. Polling (rather than
+// fsnotify) keeps things dependency-free and robust to editors that replace
+// the file via rename.
+func watchConfig(path string) {
+	var lastMod time.Time
+	var lastSize int64
+	if fi, err := os.Stat(path); err == nil {
+		lastMod, lastSize = fi.ModTime(), fi.Size()
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		fi, err := os.Stat(path)
+		if err != nil {
+			continue // file briefly missing (e.g. mid-rename); try again later
+		}
+		if fi.ModTime().Equal(lastMod) && fi.Size() == lastSize {
+			continue
+		}
+		lastMod, lastSize = fi.ModTime(), fi.Size()
+		reloadConfig(path)
+	}
+}
+
+// reloadConfig re-reads the config file and atomically swaps in the new
+// policy. Fields that require rebuilding the listener or OAuth client cannot
+// be applied without a restart and are logged as warnings.
+func reloadConfig(path string) {
+	newCfg, err := loadConfig(path)
+	if err != nil {
+		log.Printf("Config reload failed, keeping previous config: %v", err)
+		return
+	}
+
+	old := currentConfig()
+	if newCfg.Addr != old.Addr {
+		log.Printf("Config reload: 'addr' changed (%q -> %q) — restart required to take effect", old.Addr, newCfg.Addr)
+	}
+	if newCfg.CAKey != old.CAKey {
+		log.Printf("Config reload: 'ca_key' changed — restart required to take effect")
+	}
+	if newCfg.ClientID != old.ClientID || newCfg.ClientSecret != old.ClientSecret || newCfg.RedirectURL != old.RedirectURL {
+		log.Printf("Config reload: OAuth settings changed — restart required to take effect")
+	}
+	if tlsString(newCfg.TLS) != tlsString(old.TLS) {
+		log.Printf("Config reload: 'tls' changed — restart required to take effect")
+	}
+
+	configPtr.Store(newCfg)
+	log.Printf("Config reloaded from %s (%d users, %d roles)", path, len(newCfg.Users), len(newCfg.Roles))
+}
+
+func tlsString(t *TLSConfig) string {
+	if t == nil {
+		return ""
+	}
+	return t.CertFile + "|" + t.KeyFile
+}
 
 func main() {
 	configFile := "config.yaml"
@@ -105,16 +187,13 @@ func main() {
 		}
 	}
 
-	configData, err := os.ReadFile(configFile)
+	cfg, err := loadConfig(configFile)
 	if err != nil {
-		log.Fatalf("Failed to read config file %s: %v", configFile, err)
+		log.Fatalf("Failed to load config file %s: %v", configFile, err)
 	}
+	configPtr.Store(cfg)
 
-	if err := yaml.Unmarshal(configData, &config); err != nil {
-		log.Fatal("Failed to parse config:", err)
-	}
-
-	caKeyData, err := os.ReadFile(config.CAKey)
+	caKeyData, err := os.ReadFile(cfg.CAKey)
 	if err != nil {
 		log.Fatal("Failed to read CA key:", err)
 	}
@@ -131,8 +210,8 @@ func main() {
 	}
 
 	// Use the redirect URL as configured (no automatic adjustment)
-	redirectURL := config.RedirectURL
-	if config.TLS != nil && config.TLS.CertFile != "" && config.TLS.KeyFile != "" {
+	redirectURL := cfg.RedirectURL
+	if cfg.TLS != nil && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
 		// Just log a warning if there's a potential mismatch
 		if strings.HasPrefix(redirectURL, "http://") {
 			log.Printf("WARNING: TLS enabled but redirect URL uses http://. Make sure this is registered in Google OAuth.")
@@ -140,16 +219,20 @@ func main() {
 	}
 
 	oauth2Config = &oauth2.Config{
-		ClientID:     config.ClientID,
-		ClientSecret: config.ClientSecret,
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
 		RedirectURL:  redirectURL,
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{oidc.ScopeOpenID, "email"},
 	}
 
 	oidcVerifier = provider.Verifier(&oidc.Config{
-		ClientID: config.ClientID,
+		ClientID: cfg.ClientID,
 	})
+
+	// Reload policy fields (users, roles, cert_validity, extensions) when the
+	// config file changes on disk.
+	go watchConfig(configFile)
 
 	http.HandleFunc("/login", handleLogin)
 	http.HandleFunc("/callback", handleCallback)
@@ -158,12 +241,12 @@ func main() {
 
 	log.Printf("voussh %s", version.String())
 
-	if config.TLS != nil && config.TLS.CertFile != "" && config.TLS.KeyFile != "" {
-		log.Printf("Server starting on https://%s", config.Addr)
-		log.Fatal(http.ListenAndServeTLS(config.Addr, config.TLS.CertFile, config.TLS.KeyFile, nil))
+	if cfg.TLS != nil && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+		log.Printf("Server starting on https://%s", cfg.Addr)
+		log.Fatal(http.ListenAndServeTLS(cfg.Addr, cfg.TLS.CertFile, cfg.TLS.KeyFile, nil))
 	} else {
-		log.Printf("Server starting on http://%s", config.Addr)
-		log.Fatal(http.ListenAndServe(config.Addr, nil))
+		log.Printf("Server starting on http://%s", cfg.Addr)
+		log.Fatal(http.ListenAndServe(cfg.Addr, nil))
 	}
 }
 
@@ -298,7 +381,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check user authorization
-	userRoles, ok := config.Users[claims.Email]
+	userRoles, ok := currentConfig().Users[claims.Email]
 	if !ok {
 		http.Error(w, "User not authorized", http.StatusForbidden)
 		return
@@ -398,10 +481,11 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func signCertificate(pubKey ssh.PublicKey, email, role string, principals []string) (*ssh.Certificate, error) {
-	roleCfg := config.Roles[role]
+	cfg := currentConfig()
+	roleCfg := cfg.Roles[role]
 
 	// Validity: per-role override, then global, then 8h default.
-	validity := config.CertValidity
+	validity := cfg.CertValidity
 	if roleCfg.Validity != "" {
 		validity = roleCfg.Validity
 	}
@@ -413,7 +497,7 @@ func signCertificate(pubKey ssh.PublicKey, email, role string, principals []stri
 	// Extensions: per-role override, then global, then built-in default.
 	extNames := roleCfg.Extensions
 	if len(extNames) == 0 {
-		extNames = config.Extensions
+		extNames = cfg.Extensions
 	}
 	if len(extNames) == 0 {
 		extNames = defaultExtensions
