@@ -156,6 +156,8 @@ func main() {
 	http.HandleFunc("/pubkey", handlePubkey)
 	http.HandleFunc("/health", handleHealth)
 
+	log.Printf("voussh %s", version.String())
+
 	if config.TLS != nil && config.TLS.CertFile != "" && config.TLS.KeyFile != "" {
 		log.Printf("Server starting on https://%s", config.Addr)
 		log.Fatal(http.ListenAndServeTLS(config.Addr, config.TLS.CertFile, config.TLS.KeyFile, nil))
