@@ -29,8 +29,25 @@ type Config struct {
 	ClientID     string                         `yaml:"client_id"`
 	ClientSecret string                         `yaml:"client_secret"`
 	RedirectURL  string                         `yaml:"redirect_url"`
-	Users        map[string]map[string][]string `yaml:"users"` // email -> role -> principals
+	Users        map[string]map[string][]string `yaml:"users"`                // email -> role -> principals
+	Extensions   []string                       `yaml:"extensions,omitempty"` // global SSH cert extensions; defaults to defaultExtensions when unset
+	Roles        map[string]Role                `yaml:"roles,omitempty"`      // role -> per-role policy (validity, extensions)
 	TLS          *TLSConfig                     `yaml:"tls,omitempty"`
+}
+
+// Role holds per-role certificate policy. Empty fields fall back to the
+// top-level Config defaults.
+type Role struct {
+	Validity   string   `yaml:"validity,omitempty"`   // overrides CertValidity for this role
+	Extensions []string `yaml:"extensions,omitempty"` // overrides Extensions for this role
+}
+
+// defaultExtensions are the certificate extensions used when none are
+// configured. This preserves prior behaviour.
+var defaultExtensions = []string{
+	"permit-pty",
+	"permit-agent-forwarding",
+	"permit-user-rc",
 }
 
 type TLSConfig struct {
@@ -123,7 +140,6 @@ func main() {
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{oidc.ScopeOpenID, "email"},
 	}
-
 
 	oidcVerifier = provider.Verifier(&oidc.Config{
 		ClientID: config.ClientID,
@@ -366,9 +382,29 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func signCertificate(pubKey ssh.PublicKey, email, role string, principals []string) (*ssh.Certificate, error) {
-	duration, err := time.ParseDuration(config.CertValidity)
+	roleCfg := config.Roles[role]
+
+	// Validity: per-role override, then global, then 8h default.
+	validity := config.CertValidity
+	if roleCfg.Validity != "" {
+		validity = roleCfg.Validity
+	}
+	duration, err := time.ParseDuration(validity)
 	if err != nil {
 		duration = 8 * time.Hour
+	}
+
+	// Extensions: per-role override, then global, then built-in default.
+	extNames := roleCfg.Extensions
+	if len(extNames) == 0 {
+		extNames = config.Extensions
+	}
+	if len(extNames) == 0 {
+		extNames = defaultExtensions
+	}
+	extensions := make(map[string]string, len(extNames))
+	for _, name := range extNames {
+		extensions[name] = ""
 	}
 
 	now := time.Now()
@@ -381,11 +417,7 @@ func signCertificate(pubKey ssh.PublicKey, email, role string, principals []stri
 		ValidAfter:      uint64(now.Add(-5 * time.Minute).Unix()),
 		ValidBefore:     uint64(now.Add(duration).Unix()),
 		Permissions: ssh.Permissions{
-			Extensions: map[string]string{
-				"permit-pty":              "",
-				"permit-agent-forwarding": "",
-				"permit-user-rc":          "",
-			},
+			Extensions: extensions,
 		},
 	}
 
@@ -407,4 +439,3 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `{"status":"ok","service":"voussh"}`)
 }
-

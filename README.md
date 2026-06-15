@@ -55,6 +55,31 @@ addr: ":8080"
 ca_key: "./ca_key"
 cert_validity: 8h
 
+# Optional: global SSH certificate extensions. When omitted, defaults to:
+#   [permit-pty, permit-agent-forwarding, permit-user-rc]
+# Used for any role that doesn't define its own extensions under `roles`.
+# extensions:
+#   - permit-pty
+#   - permit-agent-forwarding
+#   - permit-user-rc
+
+# Optional: per-role policy. Each role may override validity and/or extensions.
+# Omitted fields fall back to cert_validity / extensions above.
+# (extensions is a full override, not additive.)
+# roles:
+#   admin:
+#     validity: 1h
+#     extensions:
+#       - permit-pty
+#       - permit-port-forwarding
+#       - permit-X11-forwarding
+#   deploy:
+#     validity: 24h
+#     extensions:
+#       - permit-pty
+#       - permit-agent-forwarding
+#       - permit-port-forwarding
+
 # Optional TLS configuration
 # tls:
 #   cert: "./server.crt"
@@ -85,7 +110,9 @@ users:
 |-------|-------------|
 | `addr` | Server listen address |
 | `ca_key` | Path to CA private key (without extension) |
-| `cert_validity` | Certificate validity duration (e.g., `8h`, `24h`) |
+| `cert_validity` | Default certificate validity duration (e.g., `8h`, `24h`) |
+| `extensions` | Global SSH cert extensions (optional; defaults to `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`) |
+| `roles` | Per-role policy overrides (optional; each role may set `validity` and/or `extensions`) |
 | `client_id` | Google OAuth client ID |
 | `client_secret` | Google OAuth client secret |
 | `redirect_url` | OAuth callback URL |
