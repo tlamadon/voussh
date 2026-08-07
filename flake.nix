@@ -183,10 +183,30 @@
         };
 
       # Home Manager module for the vsh client
-      homeManagerModule = { config, lib, pkgs, ... }:
+      homeManagerModule = { config, options, lib, pkgs, ... }:
         with lib;
         let
           cfg = config.programs.vsh;
+
+          # Shared by bash and zsh; fish needs its own syntax.
+          posixShellIntegration = ''
+            # VouSSH shell integration for local sessions
+            eval "$(${cfg.package}/bin/vsh init)"
+            ${optionalString (cfg.defaultServer != null) ''
+              export VSH_SERVER="${cfg.defaultServer}"
+            ''}
+          '';
+
+          # `programs.zsh.initExtra` was deprecated in favour of `initContent`
+          # in home-manager 25.05; `initContent` does not exist before it, so
+          # hard-coding either one breaks half the releases. Both accept the
+          # same content at the same merge order, so pick whichever the
+          # importing home-manager actually declares.
+          zshInitOption =
+            if (options.programs.zsh or { }) ? initContent then
+              "initContent"
+            else
+              "initExtra";
         in
         {
           options.programs.vsh = {
@@ -217,22 +237,12 @@
             home.packages = [ cfg.package ];
 
             # Add shell integration for bash
-            programs.bash.initExtra = mkIf cfg.enableShellIntegration ''
-              # VouSSH shell integration for local sessions
-              eval "$(${cfg.package}/bin/vsh init)"
-              ${optionalString (cfg.defaultServer != null) ''
-                export VSH_SERVER="${cfg.defaultServer}"
-              ''}
-            '';
+            programs.bash.initExtra =
+              mkIf cfg.enableShellIntegration posixShellIntegration;
 
             # Add shell integration for zsh
-            programs.zsh.initContent = mkIf cfg.enableShellIntegration ''
-              # VouSSH shell integration for local sessions
-              eval "$(${cfg.package}/bin/vsh init)"
-              ${optionalString (cfg.defaultServer != null) ''
-                export VSH_SERVER="${cfg.defaultServer}"
-              ''}
-            '';
+            programs.zsh.${zshInitOption} =
+              mkIf cfg.enableShellIntegration posixShellIntegration;
 
             # Add shell integration for fish
             programs.fish.shellInit = mkIf cfg.enableShellIntegration ''
