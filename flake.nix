@@ -26,7 +26,7 @@
 
             package = mkOption {
               type = types.package;
-              default = self.packages.${pkgs.system}.voussh;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.voussh;
               defaultText = literalExpression "pkgs.voussh";
               description = "The voussh package to use";
             };
@@ -194,7 +194,7 @@
 
             package = mkOption {
               type = types.package;
-              default = self.packages.${pkgs.system}.vsh;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.vsh;
               defaultText = literalExpression "pkgs.vsh";
               description = "The vsh package to use";
             };
@@ -226,7 +226,7 @@
             '';
 
             # Add shell integration for zsh
-            programs.zsh.initExtra = mkIf cfg.enableShellIntegration ''
+            programs.zsh.initContent = mkIf cfg.enableShellIntegration ''
               # VouSSH shell integration for local sessions
               eval "$(${cfg.package}/bin/vsh init)"
               ${optionalString (cfg.defaultServer != null) ''
