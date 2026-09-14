@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -209,30 +210,7 @@ func cmdLogin(args []string) {
 	server_mux := http.NewServeMux()
 	httpServer := &http.Server{Handler: server_mux}
 
-	server_mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		certB64 := r.URL.Query().Get("cert")
-		roleReturned := r.URL.Query().Get("role")
-
-		if certB64 == "" {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, `<!DOCTYPE html>
-<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
-<h2 style="color: #c00;">Login Failed</h2>
-<p>No certificate received.</p>
-</body></html>`)
-			resultChan <- loginResult{err: fmt.Errorf("no certificate received")}
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<!DOCTYPE html>
-<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
-<h2 style="color: #0a0;">Login Successful!</h2>
-<p>You can close this window and return to your terminal.</p>
-</body></html>`)
-
-		resultChan <- loginResult{cert: certB64, role: roleReturned}
-	})
+	server_mux.HandleFunc("/callback", callbackHandler(resultChan))
 
 	go httpServer.Serve(listener)
 
@@ -265,7 +243,7 @@ func cmdLogin(args []string) {
 	// Wait for result
 	select {
 	case result := <-resultChan:
-		httpServer.Close()
+		shutdownCallbackServer(httpServer)
 		if result.err != nil {
 			fmt.Printf("Login failed: %v\n", result.err)
 			os.Exit(1)
@@ -284,7 +262,7 @@ func cmdLogin(args []string) {
 		}
 
 	case <-time.After(5 * time.Minute):
-		httpServer.Close()
+		shutdownCallbackServer(httpServer)
 		fmt.Println("Login timeout. Please try again.")
 		os.Exit(1)
 	}
@@ -294,6 +272,57 @@ type loginResult struct {
 	cert string
 	role string
 	err  error
+}
+
+// callbackHandler serves the OAuth redirect from the voussh server. The page
+// must reach the wire before resultChan is signalled: the main goroutine
+// tears the server down as soon as it receives, so an unflushed response
+// would race the teardown and leave the browser on a connection error for a
+// login that worked.
+func callbackHandler(resultChan chan<- loginResult) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		certB64 := r.URL.Query().Get("cert")
+		roleReturned := r.URL.Query().Get("role")
+
+		if certB64 == "" {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<!DOCTYPE html>
+<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
+<h2 style="color: #c00;">Login Failed</h2>
+<p>No certificate received.</p>
+</body></html>`)
+			flushResponse(w)
+			resultChan <- loginResult{err: fmt.Errorf("no certificate received")}
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
+<h2 style="color: #0a0;">Login Successful!</h2>
+<p>You can close this window and return to your terminal.</p>
+</body></html>`)
+		flushResponse(w)
+
+		resultChan <- loginResult{cert: certB64, role: roleReturned}
+	}
+}
+
+// flushResponse pushes any buffered response bytes onto the socket.
+func flushResponse(w http.ResponseWriter) {
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// shutdownCallbackServer stops the loopback callback server, letting any
+// in-flight response drain first — Close() would sever active connections
+// mid-response. The deadline is an upper bound for a pathological client,
+// not a sleep: a drained server returns immediately.
+func shutdownCallbackServer(srv *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	srv.Shutdown(ctx)
 }
 
 // reRunArgs rebuilds the flags a user would need to repeat this login, for the
