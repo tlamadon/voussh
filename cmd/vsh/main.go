@@ -72,6 +72,8 @@ func main() {
 		cmdInit()
 	case "login":
 		cmdLogin(args)
+	case "renew":
+		cmdRenew(args)
 	case "logout":
 		cmdLogout()
 	case "status":
@@ -93,6 +95,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  init    Output shell function for local session support")
 	fmt.Println("  login   Login and obtain SSH certificate (use --device when there is no local browser)")
+	fmt.Println("  renew   Renew a certificate using a service token (non-interactive, for timers)")
 	fmt.Println("  logout  Remove SSH certificate and clear config")
 	fmt.Println("  status  Show current login status")
 	fmt.Println("  ssh     SSH to a host using certificate (use -a for all identities)")

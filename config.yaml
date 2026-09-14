@@ -25,6 +25,22 @@ redirect_url: "http://localhost:8080/callback"
 #   poll_interval: 5s      # minimum spacing between client polls
 #   max_pending: 1024      # cap on concurrent in-flight requests
 
+# Optional: machine (non-interactive) clients of POST /sign. Each service
+# authenticates with a bearer token and receives a certificate for exactly
+# the listed principals. The token is CA-signing capability for those
+# principals — treat it like a private key, and never expose /sign to the
+# internet. Unlike interactive logins, extensions default to EMPTY: add
+# permit-pty explicitly if the client needs a terminal.
+# services:
+#   herdr-hq:
+#     # exactly one of token_file / token_sha256:
+#     token_file: /var/lib/voussh/tokens/herdr-hq   # token read (and trimmed) at request time
+#     # token_sha256: "9f86d081..."                 # or: hex SHA-256 digest of the token
+#     principals: [tlamadon]
+#     validity: 12h                      # falls back to cert_validity
+#     extensions: []                     # default empty; e.g. [permit-pty]
+#     source_address: 100.88.151.28/32   # optional: CIDRs the cert may be used from
+
 # Users: email -> role -> principals
 users:
   alice@example.com:

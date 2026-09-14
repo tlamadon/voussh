@@ -167,7 +167,8 @@ users:
 | `ca_key` | Path to CA private key (without extension) |
 | `cert_validity` | Default certificate validity duration (e.g., `8h`, `24h`) |
 | `extensions` | Global SSH cert extensions (optional; defaults to `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`) |
-| `roles` | Per-role policy overrides (optional; each role may set `validity` and/or `extensions`) |
+| `roles` | Per-role policy overrides (optional; each role may set `validity`, `extensions` and/or `source_address`) |
+| `services` | Machine credentials for `POST /sign` (optional — see [Machine authentication](#machine-authentication-sign)) |
 | `client_id` | Google OAuth client ID |
 | `client_secret` | Google OAuth client secret |
 | `redirect_url` | OAuth callback URL |
@@ -181,11 +182,12 @@ The server watches the config file and automatically reloads it when it
 changes — no restart needed for policy changes. Each reload is logged:
 
 ```
-Config reloaded from config.yaml (3 users, 2 roles)
+Config reloaded from config.yaml (3 users, 2 roles, 1 services)
 ```
 
-Hot-reloaded fields: `users`, `cert_validity`, `extensions`, `roles`, and
-`device_flow.enabled`. These take effect on the next certificate issued.
+Hot-reloaded fields: `users`, `cert_validity`, `extensions`, `roles`,
+`services`, and `device_flow.enabled`. These take effect on the next
+certificate issued — a newly added service becomes usable without a restart.
 
 Changes to `addr`, `tls`, `ca_key`, or the OAuth settings (`client_id`,
 `client_secret`, `redirect_url`) still require a restart — the server logs a
@@ -350,6 +352,123 @@ are single-use: once a certificate is collected, the code is gone.
 The wire format follows [RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)
 between `vsh` and `voussh`, including the `authorization_pending`, `slow_down`,
 `expired_token` and `access_denied` responses.
+
+### Machine authentication (`/sign`)
+
+Interactive logins need a human in a browser. For daemons — dashboards, backup
+jobs, anything on a systemd timer — `POST /sign` exchanges a pre-shared bearer
+token for a short-lived certificate, no OAuth involved. Target hosts need
+nothing beyond the `TrustedUserCAKeys` they already trust: no `authorized_keys`
+entries, no per-target setup, and the credential expires on its own.
+
+> **The token is CA-signing capability for the listed principals.** Whoever
+> holds it can mint certificates for those principals until the service is
+> removed from the config. Protect it like a private key: scope the service to
+> the fewest principals possible, pin it with `source_address`, and never
+> expose `/sign` to the internet — keep voussh on a VPN, tailnet or private
+> network.
+
+#### 1. Mint a token
+
+```bash
+openssl rand -hex 32
+```
+
+Store it on the client machine, readable only by the service account that will
+use it (e.g. `/var/lib/herdr/voussh-token`, mode `0400`).
+
+#### 2. Configure the service
+
+```yaml
+services:
+  herdr-hq:
+    # exactly one of token_file / token_sha256:
+    token_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    principals: [tlamadon]
+    validity: 12h                      # falls back to cert_validity
+    source_address: 100.88.151.28/32   # CIDRs the cert may be used from
+```
+
+With `token_sha256` the raw token never touches the CA host — compute the
+digest with `printf %s "$TOKEN" | sha256sum` (`shasum -a 256` on macOS).
+Alternatively `token_file: /path/to/token` makes the server read (and trim) the
+raw token from a file at request time, so rotating it needs no config edit.
+The live config reload picks up new and changed services without a restart.
+
+Certificates for a service carry the key ID `<name>@service` (so sshd's log
+distinguishes them from interactive `<email>@<role>` certs) and **no
+extensions by default** — a daemon running non-interactive commands needs no
+pty and no agent forwarding. If the client does need a terminal, opt in
+explicitly with `extensions: [permit-pty]`. `source_address` is embedded as
+the `source-address` critical option and enforced by sshd itself: the
+certificate is refused from any other address, even if the token leaks. It
+works for interactive roles too (`roles.<name>.source_address`).
+
+#### 3. Request a certificate
+
+```bash
+curl --fail -H "Authorization: Bearer $(cat /var/lib/herdr/voussh-token)" \
+  --data-binary @$HOME/.ssh/id_ed25519.pub \
+  https://ca.example.com/sign > ~/.ssh/id_ed25519-cert.pub
+```
+
+Or use `vsh renew`, which does the same thing but generates the key pair if it
+is missing and writes the certificate atomically:
+
+```bash
+vsh renew --server https://ca.example.com --token-file /var/lib/herdr/voussh-token
+```
+
+The response is the certificate in `authorized_keys` format — written next to
+the key as `id_ed25519-cert.pub`, ssh picks it up automatically:
+
+```bash
+ssh -i ~/.ssh/id_ed25519 tlamadon@somehost   # no authorized_keys entry needed
+```
+
+#### 4. Renew on a systemd timer
+
+Renew at half the certificate lifetime so an outage of the CA never strands
+the client with an expired certificate. With `validity: 12h`, renew every 6h:
+
+```ini
+# /etc/systemd/system/vsh-renew.service
+[Unit]
+Description=Renew SSH certificate from voussh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=herdr
+ExecStart=/usr/local/bin/vsh renew \
+  --server https://ca.example.com \
+  --token-file /var/lib/herdr/voussh-token \
+  --key /var/lib/herdr/.ssh/id_ed25519
+```
+
+```ini
+# /etc/systemd/system/vsh-renew.timer
+[Unit]
+Description=Renew SSH certificate at half its lifetime
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable --now vsh-renew.timer
+```
+
+Every issuance is logged on the server with the service name, principals,
+certificate serial, key fingerprint, validity window and requesting IP; failed
+token attempts are logged with the source IP.
 
 ### Session Management
 
@@ -856,7 +975,8 @@ The server logs will show:
 - **Stateless design**: No session data stored server-side
 - **Role-based access**: Users only get principals for their assigned roles
 - **OAuth security**: Leverages Google's OAuth 2.0 implementation
-- **Certificate transparency**: All certificates include email and role in KeyId
+- **Certificate transparency**: All certificates include email and role in KeyId (service certificates use `<name>@service`)
+- **Service tokens are CA capability**: A `/sign` token mints certificates for its principals — protect it like a private key, pin it with `source_address`, and never expose the server to the internet
 
 ## Contributing
 

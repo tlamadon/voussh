@@ -36,8 +36,26 @@ type Config struct {
 	Users        map[string]map[string][]string `yaml:"users"`                 // email -> role -> principals
 	Extensions   []string                       `yaml:"extensions,omitempty"`  // global SSH cert extensions; defaults to defaultExtensions when unset
 	Roles        map[string]Role                `yaml:"roles,omitempty"`       // role -> per-role policy (validity, extensions)
+	Services     map[string]ServiceConfig       `yaml:"services,omitempty"`    // service name -> machine credentials for POST /sign
 	DeviceFlow   *DeviceFlowConfig              `yaml:"device_flow,omitempty"` // device authorization flow settings
 	TLS          *TLSConfig                     `yaml:"tls,omitempty"`
+}
+
+// validate rejects configs that must not be served. It runs on every load, so
+// a bad edit is refused at startup and skipped on reload rather than swapped
+// into a running server.
+func (c *Config) validate() error {
+	for name, svc := range c.Services {
+		if err := svc.validate(); err != nil {
+			return fmt.Errorf("service %q: %w", name, err)
+		}
+	}
+	for name, role := range c.Roles {
+		if err := validateSourceAddress(role.SourceAddress); err != nil {
+			return fmt.Errorf("role %q: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // DeviceFlowConfig tunes the device authorization flow. A nil *DeviceFlowConfig
@@ -89,8 +107,9 @@ func (d *DeviceFlowConfig) duration(get func() string, fallback time.Duration, n
 // Role holds per-role certificate policy. Empty fields fall back to the
 // top-level Config defaults.
 type Role struct {
-	Validity   string   `yaml:"validity,omitempty"`   // overrides CertValidity for this role
-	Extensions []string `yaml:"extensions,omitempty"` // overrides Extensions for this role
+	Validity      string   `yaml:"validity,omitempty"`       // overrides CertValidity for this role
+	Extensions    []string `yaml:"extensions,omitempty"`     // overrides Extensions for this role
+	SourceAddress string   `yaml:"source_address,omitempty"` // source-address critical option: CIDRs the cert may be used from
 }
 
 // defaultExtensions are the certificate extensions used when none are
@@ -162,6 +181,9 @@ func loadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
 }
 
@@ -226,7 +248,7 @@ func reloadConfig(path string) {
 	}
 
 	configPtr.Store(newCfg)
-	log.Printf("Config reloaded from %s (%d users, %d roles)", path, len(newCfg.Users), len(newCfg.Roles))
+	log.Printf("Config reloaded from %s (%d users, %d roles, %d services)", path, len(newCfg.Users), len(newCfg.Roles), len(newCfg.Services))
 }
 
 func tlsString(t *TLSConfig) string {
@@ -323,6 +345,7 @@ func main() {
 	http.HandleFunc("/login", handleLogin)
 	http.HandleFunc("/callback", handleCallback)
 	http.HandleFunc("/pubkey", handlePubkey)
+	http.HandleFunc("/sign", handleSign)
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/device", handleDeviceVerify)
 	http.HandleFunc("/device/code", handleDeviceCode)
@@ -600,17 +623,36 @@ func signCertificate(pubKey ssh.PublicKey, email, role string, principals []stri
 		extensions[name] = ""
 	}
 
+	keyID := fmt.Sprintf("%s@%s", email, role)
+	return signPolicyCertificate(pubKey, keyID, principals, duration, extensions, criticalOptions(roleCfg.SourceAddress))
+}
+
+// criticalOptions builds the critical-options map for a certificate. A nil map
+// (no source restriction) keeps the wire format identical to what voussh
+// issued before source_address existed.
+func criticalOptions(sourceAddress string) map[string]string {
+	if sourceAddress == "" {
+		return nil
+	}
+	return map[string]string{"source-address": sourceAddress}
+}
+
+// signPolicyCertificate builds and signs a certificate from fully resolved
+// policy. The five-minute ValidAfter backdate absorbs clock skew between the
+// CA and the servers checking the certificate.
+func signPolicyCertificate(pubKey ssh.PublicKey, keyID string, principals []string, duration time.Duration, extensions, critical map[string]string) (*ssh.Certificate, error) {
 	now := time.Now()
 	cert := &ssh.Certificate{
 		Key:             pubKey,
 		Serial:          uint64(now.UnixNano()),
 		CertType:        ssh.UserCert,
-		KeyId:           fmt.Sprintf("%s@%s", email, role),
+		KeyId:           keyID,
 		ValidPrincipals: principals,
 		ValidAfter:      uint64(now.Add(-5 * time.Minute).Unix()),
 		ValidBefore:     uint64(now.Add(duration).Unix()),
 		Permissions: ssh.Permissions{
-			Extensions: extensions,
+			Extensions:      extensions,
+			CriticalOptions: critical,
 		},
 	}
 
