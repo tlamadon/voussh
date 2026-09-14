@@ -7,6 +7,7 @@ A stateless, lightweight SSH Certificate Authority server and client that authen
 - 🔐 **Google OAuth authentication** - Leverage existing Google Workspace identities
 - 🎫 **Short-lived certificates** - Time-bound certificates reduce security risks
 - 👥 **Role-based access** - Map users to roles with specific SSH principals
+- 📱 **Device flow** - Log in on a headless or remote machine by approving from your phone or laptop
 - 🚀 **Stateless server** - Horizontally scalable, no session storage
 - 🔧 **Simple setup** - Minimal configuration required
 - 🌐 **HTTPS support** - Optional TLS for secure deployments
@@ -170,6 +171,8 @@ users:
 | `client_id` | Google OAuth client ID |
 | `client_secret` | Google OAuth client secret |
 | `redirect_url` | OAuth callback URL |
+| `base_url` | Externally reachable origin for device-flow links (optional; derived from `redirect_url`) |
+| `device_flow` | Device flow settings (optional; enabled by default — see [Device Flow](#device-flow-headless-and-remote-machines)) |
 | `users` | User authorization mapping |
 
 #### Live config reload
@@ -181,8 +184,8 @@ changes — no restart needed for policy changes. Each reload is logged:
 Config reloaded from config.yaml (3 users, 2 roles)
 ```
 
-Hot-reloaded fields: `users`, `cert_validity`, `extensions`, and `roles`.
-These take effect on the next certificate issued.
+Hot-reloaded fields: `users`, `cert_validity`, `extensions`, `roles`, and
+`device_flow.enabled`. These take effect on the next certificate issued.
 
 Changes to `addr`, `tls`, `ca_key`, or the OAuth settings (`client_id`,
 `client_secret`, `redirect_url`) still require a restart — the server logs a
@@ -223,6 +226,9 @@ vsh login --server http://localhost:8080
 # Login with a specific role
 vsh login --server http://localhost:8080 --role admin
 
+# Login without a local browser (approve from your phone or laptop)
+vsh login --device --server http://localhost:8080
+
 # Create a local session (shell-specific) - no eval needed!
 vsh login --local --server http://localhost:8080
 
@@ -244,6 +250,106 @@ vsh pubkey
 # Show version
 vsh version
 ```
+
+### Device Flow (headless and remote machines)
+
+The default login opens a browser and waits for a callback on `localhost`. That
+only works when the browser runs on the same machine as `vsh`. When you are
+SSH'd into a server, on a box with no desktop, or behind NAT, use the device
+flow instead:
+
+```bash
+vsh login --device --server https://ca.example.com
+```
+
+```
+To authorize this machine, open this page on any device:
+
+    https://ca.example.com/device
+
+and enter the code:
+
+    WDJB-MJHT
+
+Waiting for approval (expires in 10m0s)...
+```
+
+Open that page on your phone or laptop, enter the code, sign in with Google,
+and confirm. The certificate is delivered straight to the waiting terminal:
+
+```
+Approved by alice@example.com (principals: root, admin)
+Login successful! Role: default
+Certificate saved to: /home/you/.ssh/id_ed25519-cert.pub (global session)
+```
+
+`--device` composes with `--role` and `--local` exactly like the browser flow.
+
+Nothing about your Google Cloud setup changes: the approving browser runs the
+same web login voussh already uses, so the existing "Web application" OAuth
+client is all you need.
+
+#### Before you approve
+
+The confirmation page shows the **SSH key fingerprint** the certificate would
+be issued against, along with the identity, role and principals:
+
+```
+Signed in as alice@example.com.
+
+  Role          default
+  Principals    root, admin
+  SSH key       SHA256:kFPcGraoTAR5MhJuPRa6hWwCRqqDCJBfP91h+PNp62c
+  Key comment   alice@laptop
+  Code          WDJB-MJHT
+```
+
+Check it. Approving issues a certificate carrying **your** principals to
+whichever machine holds that key. If you did not start the login, or the
+fingerprint does not match the machine you are sitting at, choose **Reject** —
+someone may be trying to get you to authorize their device. This is the one
+attack the device flow adds that the browser flow does not have, and the
+fingerprint is what defends against it.
+
+Run `ssh-keygen -lf ~/.ssh/id_ed25519.pub` on the machine you are logging in
+from to see the fingerprint it should match.
+
+#### Server configuration
+
+The flow is enabled by default and needs no configuration. It grants nothing
+the browser flow does not: the same identity provider, the same `users` map,
+the same roles. To tune or disable it:
+
+```yaml
+# Optional: externally reachable origin used to build the verification link.
+# Derived from redirect_url when unset, which is usually correct.
+# base_url: "https://ca.example.com"
+
+device_flow:
+  enabled: true          # set false to remove the /device endpoints entirely
+  code_validity: 10m     # how long a code stays usable
+  poll_interval: 5s      # minimum spacing between client polls
+  max_pending: 1024      # cap on concurrent in-flight requests
+```
+
+`enabled` is picked up by the live config reload. The timing fields are read at
+startup and need a restart; the server logs a warning if you change them.
+
+Requests live only in memory, so a restart cancels anything in flight. Codes
+are single-use: once a certificate is collected, the code is gone.
+
+#### Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/device/code` | POST | CLI requests a device code and user code |
+| `/device` | GET, POST | Human enters the user code |
+| `/device/approve` | POST | Human confirms or rejects |
+| `/device/token` | POST | CLI polls for its certificate |
+
+The wire format follows [RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)
+between `vsh` and `voussh`, including the `authorization_pending`, `slow_down`,
+`expired_token` and `access_denied` responses.
 
 ### Session Management
 

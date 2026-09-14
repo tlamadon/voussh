@@ -92,7 +92,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  init    Output shell function for local session support")
-	fmt.Println("  login   Login and obtain SSH certificate")
+	fmt.Println("  login   Login and obtain SSH certificate (use --device when there is no local browser)")
 	fmt.Println("  logout  Remove SSH certificate and clear config")
 	fmt.Println("  status  Show current login status")
 	fmt.Println("  ssh     SSH to a host using certificate (use -a for all identities)")
@@ -161,6 +161,7 @@ func cmdLogin(args []string) {
 	server := fs.String("server", "", "Server URL")
 	role := fs.String("role", "", "Role to assume (default: user's default role)")
 	local := fs.Bool("local", false, "Create a local session (shell-specific) instead of global")
+	deviceFlow := fs.Bool("device", false, "Approve from another device instead of a local browser")
 	fs.Parse(args)
 
 	// If no server specified, use history or prompt
@@ -178,14 +179,15 @@ func cmdLogin(args []string) {
 	// Add to server history
 	addServerToHistory(serverURL)
 
-	// Get user's SSH public key
-	homeDir, _ := os.UserHomeDir()
-	pubKeyPath := filepath.Join(homeDir, ".ssh", "id_ed25519.pub")
-	pubKeyData, err := os.ReadFile(pubKeyPath)
+	pubKeyData, err := readUserPublicKey()
 	if err != nil {
-		fmt.Printf("Failed to read SSH public key (%s): %v\n", pubKeyPath, err)
-		fmt.Println("Please generate an SSH key with: ssh-keygen -t ed25519")
+		fmt.Printf("%v\n", err)
 		os.Exit(1)
+	}
+
+	if *deviceFlow {
+		cmdLoginDevice(pubKeyData, *role, *local)
+		return
 	}
 
 	// Base64 encode the public key for URL safety
@@ -237,9 +239,6 @@ func cmdLogin(args []string) {
 		loginURL += "&role=" + *role
 	}
 
-	fmt.Printf("DEBUG: CLI listening on port: %d\n", port)
-	fmt.Printf("DEBUG: Public key base64 length: %d\n", len(pubKeyB64))
-
 	// Warn about HSTS for Tailscale domains
 	if strings.HasPrefix(loginURL, "http://") && strings.Contains(loginURL, ".ts.net") {
 		fmt.Println("⚠️  Warning: Tailscale domains (.ts.net) require HTTPS due to browser HSTS policies.")
@@ -253,7 +252,12 @@ func cmdLogin(args []string) {
 	openBrowser(loginURL)
 	fmt.Printf("Waiting for callback on localhost:%d...\n", port)
 	fmt.Println("Note: The callback only works if the browser is on the same machine as this CLI.")
-	fmt.Println("      If using remote/Tailscale access, you may need to manually copy the certificate from the browser.")
+	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
+		fmt.Println("      You appear to be on a remote machine — 'vsh login --device' lets you")
+		fmt.Println("      approve from your laptop or phone instead.")
+	} else {
+		fmt.Println("      For remote/Tailscale access, use 'vsh login --device' instead.")
+	}
 
 	// Wait for result
 	select {
@@ -271,40 +275,9 @@ func cmdLogin(args []string) {
 			os.Exit(1)
 		}
 
-		if *local {
-			// For local sessions, output environment variables to be sourced
-			// This allows the certificate to be stored in the shell's environment
-			certB64 := base64.StdEncoding.EncodeToString(certData)
-
-			// Check if we're in eval mode (output is being captured)
-			if os.Getenv("VSH_EVAL_MODE") == "1" {
-				// Output shell commands to set environment variables
-				fmt.Printf("export VSH_LOCAL_CERT='%s'\n", certB64)
-				fmt.Printf("export VSH_LOCAL_SERVER='%s'\n", serverURL)
-				fmt.Printf("export VSH_LOCAL_ROLE='%s'\n", result.role)
-			} else {
-				fmt.Printf("Login successful! Role: %s\n", result.role)
-				fmt.Println("\nLocal session created. To activate it in your shell, run:")
-				roleArg := ""
-				if *role != "" {
-					roleArg = " --role " + *role
-				}
-				fmt.Printf("  eval \"$(VSH_EVAL_MODE=1 vsh login --local --server %s%s)\"\n", serverURL, roleArg)
-			}
-		} else {
-			// Global session - write certificate to ~/.ssh/id_ed25519-cert.pub
-			certPath := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
-			if err := os.WriteFile(certPath, certData, 0644); err != nil {
-				fmt.Printf("Failed to save certificate: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Save current server
-			configPath := filepath.Join(vshDir, "current_server")
-			os.WriteFile(configPath, []byte(serverURL), 0600)
-
-			fmt.Printf("Login successful! Role: %s\n", result.role)
-			fmt.Printf("Certificate saved to: %s (global session)\n", certPath)
+		if err := saveSession(certData, result.role, *local, reRunArgs(*role, false)); err != nil {
+			fmt.Printf("%v\n", err)
+			os.Exit(1)
 		}
 
 	case <-time.After(5 * time.Minute):
@@ -318,6 +291,67 @@ type loginResult struct {
 	cert string
 	role string
 	err  error
+}
+
+// reRunArgs rebuilds the flags a user would need to repeat this login, for the
+// hint shown when a local session is created outside eval mode.
+func reRunArgs(role string, deviceFlow bool) string {
+	args := ""
+	if deviceFlow {
+		args += " --device"
+	}
+	if role != "" {
+		args += " --role " + role
+	}
+	return args
+}
+
+// saveSession persists a freshly issued certificate. A global session writes
+// the certificate next to the user's key; a local one emits shell exports so
+// the certificate lives only in the calling shell's environment.
+func saveSession(certData []byte, grantedRole string, local bool, rerun string) error {
+	if local {
+		certB64 := base64.StdEncoding.EncodeToString(certData)
+
+		// In eval mode the caller is capturing stdout to feed to `eval`, so
+		// nothing but the exports may be printed.
+		if os.Getenv("VSH_EVAL_MODE") == "1" {
+			fmt.Printf("export VSH_LOCAL_CERT='%s'\n", certB64)
+			fmt.Printf("export VSH_LOCAL_SERVER='%s'\n", serverURL)
+			fmt.Printf("export VSH_LOCAL_ROLE='%s'\n", grantedRole)
+			return nil
+		}
+
+		fmt.Printf("Login successful! Role: %s\n", grantedRole)
+		fmt.Println("\nLocal session created. To activate it in your shell, run:")
+		fmt.Printf("  eval \"$(VSH_EVAL_MODE=1 vsh login --local --server %s%s)\"\n", serverURL, rerun)
+		return nil
+	}
+
+	homeDir, _ := os.UserHomeDir()
+	certPath := filepath.Join(homeDir, ".ssh", "id_ed25519-cert.pub")
+	if err := os.WriteFile(certPath, certData, 0644); err != nil {
+		return fmt.Errorf("failed to save certificate: %w", err)
+	}
+
+	configPath := filepath.Join(vshDir, "current_server")
+	os.WriteFile(configPath, []byte(serverURL), 0600)
+
+	fmt.Printf("Login successful! Role: %s\n", grantedRole)
+	fmt.Printf("Certificate saved to: %s (global session)\n", certPath)
+	return nil
+}
+
+// readUserPublicKey loads the SSH public key that certificates are issued
+// against.
+func readUserPublicKey() ([]byte, error) {
+	homeDir, _ := os.UserHomeDir()
+	pubKeyPath := filepath.Join(homeDir, ".ssh", "id_ed25519.pub")
+	data, err := os.ReadFile(pubKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read SSH public key (%s): %w\nPlease generate an SSH key with: ssh-keygen -t ed25519", pubKeyPath, err)
+	}
+	return data, nil
 }
 
 func openBrowser(url string) {

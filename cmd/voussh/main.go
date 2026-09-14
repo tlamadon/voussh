@@ -32,10 +32,58 @@ type Config struct {
 	ClientID     string                         `yaml:"client_id"`
 	ClientSecret string                         `yaml:"client_secret"`
 	RedirectURL  string                         `yaml:"redirect_url"`
-	Users        map[string]map[string][]string `yaml:"users"`                // email -> role -> principals
-	Extensions   []string                       `yaml:"extensions,omitempty"` // global SSH cert extensions; defaults to defaultExtensions when unset
-	Roles        map[string]Role                `yaml:"roles,omitempty"`      // role -> per-role policy (validity, extensions)
+	BaseURL      string                         `yaml:"base_url,omitempty"`    // externally reachable origin; derived from redirect_url when unset
+	Users        map[string]map[string][]string `yaml:"users"`                 // email -> role -> principals
+	Extensions   []string                       `yaml:"extensions,omitempty"`  // global SSH cert extensions; defaults to defaultExtensions when unset
+	Roles        map[string]Role                `yaml:"roles,omitempty"`       // role -> per-role policy (validity, extensions)
+	DeviceFlow   *DeviceFlowConfig              `yaml:"device_flow,omitempty"` // device authorization flow settings
 	TLS          *TLSConfig                     `yaml:"tls,omitempty"`
+}
+
+// DeviceFlowConfig tunes the device authorization flow. A nil *DeviceFlowConfig
+// behaves as an enabled flow with default timings, so existing configs pick the
+// feature up without edits.
+type DeviceFlowConfig struct {
+	// Enabled is a pointer so that an absent key means "on" while an explicit
+	// `enabled: false` switches the flow off.
+	Enabled      *bool  `yaml:"enabled,omitempty"`
+	CodeValidity string `yaml:"code_validity,omitempty"` // how long a code stays usable; default 10m
+	PollInterval string `yaml:"poll_interval,omitempty"` // minimum client poll spacing; default 5s
+	MaxPending   int    `yaml:"max_pending,omitempty"`   // cap on concurrent requests; default 1024
+}
+
+func (d *DeviceFlowConfig) enabled() bool {
+	if d == nil || d.Enabled == nil {
+		return true
+	}
+	return *d.Enabled
+}
+
+func (d *DeviceFlowConfig) codeValidity() time.Duration {
+	return d.duration(func() string { return d.CodeValidity }, 10*time.Minute, "code_validity")
+}
+
+func (d *DeviceFlowConfig) pollInterval() time.Duration {
+	return d.duration(func() string { return d.PollInterval }, 5*time.Second, "poll_interval")
+}
+
+func (d *DeviceFlowConfig) maxPending() int {
+	if d == nil || d.MaxPending <= 0 {
+		return 1024
+	}
+	return d.MaxPending
+}
+
+func (d *DeviceFlowConfig) duration(get func() string, fallback time.Duration, name string) time.Duration {
+	if d == nil || get() == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(get())
+	if err != nil {
+		log.Printf("Config: device_flow.%s is not a valid duration (%q), using %s", name, get(), fallback)
+		return fallback
+	}
+	return parsed
 }
 
 // Role holds per-role certificate policy. Empty fields fall back to the
@@ -62,6 +110,32 @@ type StateData struct {
 	Port   string `json:"p,omitempty"`
 	Role   string `json:"r,omitempty"`
 	Pubkey string `json:"k,omitempty"`
+	// Device carries the user code when the login was started from the device
+	// page. Only the user code travels through the browser — never the device
+	// code, which is the CLI's secret.
+	Device string `json:"d,omitempty"`
+}
+
+// encodeState packs state for the OAuth round trip as compact JSON in base64url.
+func encodeState(data StateData) (string, error) {
+	stateJSON, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(stateJSON), nil
+}
+
+// decodeState reverses encodeState.
+func decodeState(state string) (StateData, error) {
+	stateJSON, err := base64.RawURLEncoding.DecodeString(state)
+	if err != nil {
+		return StateData{}, err
+	}
+	var data StateData
+	if err := json.Unmarshal(stateJSON, &data); err != nil {
+		return StateData{}, err
+	}
+	return data, nil
 }
 
 var (
@@ -139,6 +213,16 @@ func reloadConfig(path string) {
 	}
 	if tlsString(newCfg.TLS) != tlsString(old.TLS) {
 		log.Printf("Config reload: 'tls' changed — restart required to take effect")
+	}
+	// device_flow.enabled is read per request, so it reloads; the timing knobs
+	// are baked into the store at startup and cannot be.
+	if newCfg.DeviceFlow.codeValidity() != old.DeviceFlow.codeValidity() ||
+		newCfg.DeviceFlow.pollInterval() != old.DeviceFlow.pollInterval() ||
+		newCfg.DeviceFlow.maxPending() != old.DeviceFlow.maxPending() {
+		log.Printf("Config reload: device_flow timings changed — restart required to take effect")
+	}
+	if newCfg.DeviceFlow.enabled() != old.DeviceFlow.enabled() {
+		log.Printf("Config reload: device flow %s", map[bool]string{true: "enabled", false: "disabled"}[newCfg.DeviceFlow.enabled()])
 	}
 
 	configPtr.Store(newCfg)
@@ -230,6 +314,8 @@ func main() {
 		ClientID: cfg.ClientID,
 	})
 
+	initDeviceFlow(cfg)
+
 	// Reload policy fields (users, roles, cert_validity, extensions) when the
 	// config file changes on disk.
 	go watchConfig(configFile)
@@ -238,8 +324,24 @@ func main() {
 	http.HandleFunc("/callback", handleCallback)
 	http.HandleFunc("/pubkey", handlePubkey)
 	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/device", handleDeviceVerify)
+	http.HandleFunc("/device/code", handleDeviceCode)
+	http.HandleFunc("/device/approve", handleDeviceApprove)
+	http.HandleFunc("/device/token", handleDeviceToken)
 
 	log.Printf("voussh %s", version.String())
+
+	if cfg.DeviceFlow.enabled() {
+		base := deviceBaseURL(cfg)
+		if base == "" {
+			log.Printf("WARNING: device flow is enabled but no verification URL can be derived from redirect_url. Set base_url in the config.")
+		} else {
+			log.Printf("Device flow enabled: %s/device (codes valid %s, poll interval %s)",
+				base, cfg.DeviceFlow.codeValidity(), cfg.DeviceFlow.pollInterval())
+		}
+	} else {
+		log.Printf("Device flow disabled")
+	}
 
 	if cfg.TLS != nil && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
 		log.Printf("Server starting on https://%s", cfg.Addr)
@@ -302,28 +404,48 @@ func cmdInit(args []string) {
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-	cliPort := r.URL.Query().Get("cli_port")
-	role := r.URL.Query().Get("role")
-	pubkey := r.URL.Query().Get("pubkey")
-
-	// Encode state data as compact JSON, then base64
-	stateData := StateData{
-		Port:   cliPort,
-		Role:   role,
-		Pubkey: pubkey,
-	}
-
-	stateJSON, err := json.Marshal(stateData)
+	state, err := encodeState(StateData{
+		Port:   r.URL.Query().Get("cli_port"),
+		Role:   r.URL.Query().Get("role"),
+		Pubkey: r.URL.Query().Get("pubkey"),
+	})
 	if err != nil {
 		http.Error(w, "Failed to encode state", http.StatusInternalServerError)
 		return
 	}
 
-	// Use base64 URL encoding for the state
-	state := base64.RawURLEncoding.EncodeToString(stateJSON)
-
 	authURL := oauth2Config.AuthCodeURL(state)
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
+}
+
+// resolvePrincipals applies the users/roles policy: it maps a verified email
+// and a requested role onto the principals the certificate may carry. An empty
+// role selects "default". The returned role is the one actually used.
+func resolvePrincipals(email, role string) (string, []string, error) {
+	userRoles, ok := currentConfig().Users[email]
+	if !ok {
+		return "", nil, fmt.Errorf("user %s is not authorized", email)
+	}
+
+	if role == "" {
+		role = "default"
+	}
+
+	principals, ok := userRoles[role]
+	if !ok {
+		available := make([]string, 0, len(userRoles))
+		for name := range userRoles {
+			available = append(available, name)
+		}
+		sort.Strings(available)
+		return "", nil, fmt.Errorf("role %q not available. Available roles: %s",
+			role, strings.Join(available, ", "))
+	}
+	if len(principals) == 0 {
+		return "", nil, fmt.Errorf("no principals configured for role %q", role)
+	}
+
+	return role, principals, nil
 }
 
 func handleCallback(w http.ResponseWriter, r *http.Request) {
@@ -333,18 +455,9 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decode state from base64 JSON
-	state := r.URL.Query().Get("state")
-
-	stateJSON, err := base64.RawURLEncoding.DecodeString(state)
+	stateData, err := decodeState(r.URL.Query().Get("state"))
 	if err != nil {
-		http.Error(w, "Invalid state encoding", http.StatusBadRequest)
-		return
-	}
-
-	var stateData StateData
-	if err := json.Unmarshal(stateJSON, &stateData); err != nil {
-		http.Error(w, "Invalid state format", http.StatusBadRequest)
+		http.Error(w, "Invalid state", http.StatusBadRequest)
 		return
 	}
 
@@ -380,32 +493,20 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check user authorization
-	userRoles, ok := currentConfig().Users[claims.Email]
-	if !ok {
-		http.Error(w, "User not authorized", http.StatusForbidden)
-		return
-	}
-
-	// Use "default" role if none specified
-	if role == "" {
-		role = "default"
-	}
-
-	// Get principals for the requested role
-	principals, ok := userRoles[role]
-	if !ok {
-		// List available roles for the user
-		var availableRoles []string
-		for r := range userRoles {
-			availableRoles = append(availableRoles, r)
+	// A login started from the device page continues there: the approval step
+	// happens in this browser, and the certificate goes to the polling CLI.
+	if stateData.Device != "" {
+		if !deviceFlowEnabled() {
+			http.Error(w, "Device flow is disabled", http.StatusNotFound)
+			return
 		}
-		http.Error(w, fmt.Sprintf("Role '%s' not available. Available roles: %s", role, strings.Join(availableRoles, ", ")), http.StatusForbidden)
+		handleDeviceCallback(w, stateData.Device, claims.Email)
 		return
 	}
 
-	if len(principals) == 0 {
-		http.Error(w, "No principals for role", http.StatusForbidden)
+	role, principals, err := resolvePrincipals(claims.Email, role)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -418,9 +519,9 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		pubKey, _, _, _, err := ssh.ParseAuthorizedKey(pubkeyBytes)
+		pubKey, _, err := parseUserPublicKey(pubkeyBytes)
 		if err != nil {
-			http.Error(w, "Invalid public key", http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -431,17 +532,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		certB64 = base64.RawURLEncoding.EncodeToString(ssh.MarshalAuthorizedKey(cert))
 
-		// Log certificate issuance
-		validUntil := time.Unix(int64(cert.ValidBefore), 0)
-		exts := make([]string, 0, len(cert.Permissions.Extensions))
-		for name := range cert.Permissions.Extensions {
-			exts = append(exts, name)
-		}
-		sort.Strings(exts)
-		log.Printf("Certificate issued: user=%s, role=%s, principals=[%s], validity=%s (until %s), extensions=[%s]",
-			claims.Email, role, strings.Join(principals, ", "),
-			time.Until(validUntil).Round(time.Second), validUntil.Format(time.RFC3339),
-			strings.Join(exts, ", "))
+		logCertificateIssued(cert, claims.Email, role, principals, "browser")
 	}
 
 	// Redirect to CLI or show token
@@ -452,7 +543,9 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Device flow: display certificate for manual copy
+	// No CLI listener to redirect to: fall back to showing the certificate for
+	// manual copying. For a machine with no usable browser, prefer the device
+	// flow (`vsh login --device`) over this page.
 	w.Header().Set("Content-Type", "text/html")
 	certDisplay := ""
 	if certB64 != "" {

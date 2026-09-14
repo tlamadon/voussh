@@ -12,6 +12,19 @@ client_id: "xxx.apps.googleusercontent.com"
 client_secret: "xxx"
 redirect_url: "http://localhost:8080/callback"
 
+# Optional: externally reachable origin used to build device-flow links.
+# Derived from redirect_url when unset, which is usually what you want.
+# base_url: "https://ca.example.com"
+
+# Optional: device authorization flow, for logging in on machines with no
+# local browser (`vsh login --device`). Enabled by default; the whole block
+# can be omitted.
+# device_flow:
+#   enabled: true          # set false to remove the /device endpoints
+#   code_validity: 10m     # how long a code stays usable
+#   poll_interval: 5s      # minimum spacing between client polls
+#   max_pending: 1024      # cap on concurrent in-flight requests
+
 # Users: email -> role -> principals
 users:
   alice@example.com:

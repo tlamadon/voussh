@@ -31,6 +31,17 @@ client_secret: "YOUR_CLIENT_SECRET"
 redirect_url: "http://localhost:8080/callback"  # Must match Google Console exactly!
 ```
 
+## Note on the device flow
+
+`vsh login --device` needs **no additional Google configuration**. The browser
+that approves a device runs the same web login described above, so the "Web
+application" client you just created covers it. In particular you do *not*
+need a "TV and Limited Input devices" client.
+
+If the verification link voussh prints is not reachable from your phone — for
+example because `redirect_url` points at `localhost` — set `base_url` in
+config.yaml to the origin users can actually reach.
+
 ## Common Issues
 
 ### Error 401: invalid_client
