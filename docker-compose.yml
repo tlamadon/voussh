@@ -1,0 +1,11 @@
+services:
+  voussh:
+    image: ghcr.io/tlamadon/voussh:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    # Mount the whole directory holding config.yaml and the CA key (and TLS
+    # certs, if used) at /data — the container's working directory. All the
+    # relative paths in config.yaml (./ca_key, ./server.crt, ...) resolve here.
+    volumes:
+      - /home/tlamadon/voussh:/data
