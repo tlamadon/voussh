@@ -8,6 +8,14 @@ cert_validity: 8h
 #   cert: "./server.crt"
 #   key: "./server.key"
 
+# Optional: peers whose X-Forwarded-For / X-Forwarded-Proto headers voussh
+# will believe — set this when a reverse proxy (Caddy, nginx) fronts voussh.
+# Empty (the default) means trust nothing and use the socket peer address.
+# Only list addresses nothing but the proxy can connect from: anyone who can
+# reach the port from a listed address can forge their source address.
+# trusted_proxies:
+#   - 172.17.0.1/32   # CIDRs or bare IPs
+
 client_id: "xxx.apps.googleusercontent.com"
 client_secret: "xxx"
 redirect_url: "http://localhost:8080/callback"

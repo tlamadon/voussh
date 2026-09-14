@@ -412,6 +412,43 @@ func TestDeviceVerifyRateLimited(t *testing.T) {
 	}
 }
 
+// Behind a trusted proxy the limiter must key on the forwarded client, not
+// the proxy: one noisy caller exhausting everyone's budget is the bug that
+// trusted_proxies exists to fix.
+func TestDeviceVerifyLimiterBucketsForwardedClients(t *testing.T) {
+	cfg := testConfig()
+	cfg.TrustedProxies = []string{"192.0.2.1/32"} // httptest's default peer
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("compile trusted_proxies: %v", err)
+	}
+	setupDeviceTest(t, cfg)
+
+	post := func(client string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/device",
+			strings.NewReader(url.Values{"user_code": {"WDJB-MJHT"}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-For", client)
+		rr := httptest.NewRecorder()
+		handleDeviceVerify(rr, req)
+		return rr
+	}
+
+	var limited bool
+	for i := 0; i < 25; i++ {
+		if post("10.0.0.1").Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatal("first forwarded client was never rate limited")
+	}
+
+	if code := post("10.0.0.2").Code; code == http.StatusTooManyRequests {
+		t.Fatal("second forwarded client shares the first client's bucket")
+	}
+}
+
 func TestApprovalPageEscapesKeyComment(t *testing.T) {
 	setupDeviceTest(t, nil)
 

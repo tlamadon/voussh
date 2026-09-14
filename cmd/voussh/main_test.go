@@ -340,6 +340,37 @@ func TestLoadConfigRejectsBadServices(t *testing.T) {
 	})
 }
 
+// A reload that adds trusted_proxies takes effect immediately, and a reload
+// with a malformed entry is rejected wholesale — never half-applied.
+func TestReloadTrustedProxies(t *testing.T) {
+	setupDeviceTest(t, nil)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, configFileBase)
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("load initial config: %v", err)
+	}
+	configPtr.Store(cfg)
+
+	req := proxyRequest("192.0.2.1:1234", "10.0.0.7")
+	if got := clientIP(req); got != "192.0.2.1" {
+		t.Fatalf("clientIP before opt-in = %q, want the peer address", got)
+	}
+
+	writeConfigFile(t, path, configFileBase+"trusted_proxies:\n  - 192.0.2.1/32\n  - 2001:db8::1\n")
+	reloadConfig(path)
+	if got := clientIP(req); got != "10.0.0.7" {
+		t.Errorf("clientIP after reload = %q, want the forwarded client", got)
+	}
+
+	writeConfigFile(t, path, configFileBase+"trusted_proxies:\n  - not-an-ip\n")
+	reloadConfig(path)
+	if got := clientIP(req); got != "10.0.0.7" {
+		t.Errorf("clientIP after broken reload = %q, want 10.0.0.7 (previous config kept)", got)
+	}
+}
+
 // A config reload must make a newly added service usable without a restart,
 // and a broken edit must keep the previous (working) config.
 func TestReloadPicksUpNewService(t *testing.T) {

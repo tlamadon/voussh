@@ -166,6 +166,7 @@ users:
 | `addr` | Server listen address |
 | `ca_key` | Path to CA private key (without extension) |
 | `cert_validity` | Default certificate validity duration (e.g., `8h`, `24h`) |
+| `trusted_proxies` | Peers whose `X-Forwarded-*` headers are believed (optional — see [Behind a reverse proxy](#behind-a-reverse-proxy)) |
 | `extensions` | Global SSH cert extensions (optional; defaults to `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`) |
 | `roles` | Per-role policy overrides (optional; each role may set `validity`, `extensions` and/or `source_address`) |
 | `services` | Machine credentials for `POST /sign` (optional — see [Machine authentication](#machine-authentication-sign)) |
@@ -187,9 +188,9 @@ Config reloaded from config.yaml (3 users, 2 roles, 1 services)
 ```
 
 Hot-reloaded fields: `users`, `cert_validity`, `extensions`, `roles`,
-`services`, `admin.emails`, and `device_flow.enabled`. These take effect on
-the next certificate issued — a newly added service becomes usable without a
-restart.
+`services`, `admin.emails`, `trusted_proxies`, and `device_flow.enabled`.
+These take effect on the next certificate issued — a newly added service
+becomes usable without a restart.
 
 Changes to `addr`, `tls`, `ca_key`, or the OAuth settings (`client_id`,
 `client_secret`, `redirect_url`) still require a restart — the server logs a
@@ -960,6 +961,62 @@ For production deployments, use HTTPS:
      key: "/etc/letsencrypt/live/voussh.example.com/privkey.pem"
    ```
 3. Update OAuth redirect URL to use HTTPS
+
+### Behind a reverse proxy
+
+Instead of terminating TLS itself, voussh can sit behind a proxy that does —
+useful when a Caddy or nginx instance already holds a wildcard certificate.
+Three settings matter:
+
+```yaml
+# no tls: block — the proxy terminates HTTPS, voussh speaks plain HTTP
+addr: "127.0.0.1:8080"
+redirect_url: "https://ca.example.com/callback"   # the EXTERNAL origin
+trusted_proxies:
+  - 127.0.0.1/32     # the address the proxy connects FROM
+```
+
+`base_url` is optional here: device-flow links are derived from
+`redirect_url`, which already points at the external origin.
+
+`trusted_proxies` tells voussh which peers' `X-Forwarded-For` and
+`X-Forwarded-Proto` headers to believe. Without it everything still works,
+but every request appears to come from the proxy: the per-IP rate limiters
+collapse into a single bucket, the audit log names the proxy on every line,
+and the admin session cookie loses its `Secure` flag. With it, voussh walks
+`X-Forwarded-For` right to left past trusted hops, so a client-supplied
+header (`X-Forwarded-For: 1.2.3.4` arrives as `1.2.3.4, <real-ip>` after the
+proxy appends) can never forge the source address.
+
+**The trust model**: listing an address in `trusted_proxies` is a statement
+that nothing except the named proxy can connect from it. If the port is
+reachable directly, the entry hands every caller the ability to forge their
+source address — bind voussh to loopback (or a firewalled interface) so the
+proxy is genuinely the only way in.
+
+A complete Caddy example — Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto`
+and `X-Forwarded-Host` by default, no extra configuration needed:
+
+```
+ca.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+**The Docker gotcha**: when voussh runs as a container with a published port
+and the proxy runs on the host, the peer address voussh sees is the Docker
+bridge gateway (`172.17.0.1`), not `127.0.0.1` — the host-loopback connection
+is serviced by `docker-proxy`. Configuring `trusted_proxies: [127.0.0.1/32]`
+there is a silent no-op: nothing matches, and you keep the single-bucket
+limiter. Trust the gateway address instead:
+
+```yaml
+trusted_proxies:
+  - 172.17.0.1/32
+```
+
+`/32` on the gateway is tight: another container can source from other
+`172.17.0.x` addresses but not from the gateway itself.
 
 ## Troubleshooting
 

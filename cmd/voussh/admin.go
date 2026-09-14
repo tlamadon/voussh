@@ -146,7 +146,6 @@ func handleAdminCallback(w http.ResponseWriter, r *http.Request, email string) {
 		return
 	}
 
-	cfg := currentConfig()
 	expires := time.Now().Add(adminSessionTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
@@ -155,7 +154,10 @@ func handleAdminCallback(w http.ResponseWriter, r *http.Request, email string) {
 		Expires:  expires,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   cfg.TLS != nil && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "",
+		// The browser's connection, not ours: behind a TLS-terminating proxy
+		// this request arrives over plain HTTP but the cookie must still only
+		// travel over HTTPS.
+		Secure: requestScheme(r) == "https",
 	})
 	log.Printf("Admin: login by %s from %s", email, clientIP(r))
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)

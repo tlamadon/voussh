@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"sort"
@@ -27,20 +28,26 @@ import (
 )
 
 type Config struct {
-	Addr         string                         `yaml:"addr"`
-	CAKey        string                         `yaml:"ca_key"`
-	CertValidity string                         `yaml:"cert_validity"`
-	ClientID     string                         `yaml:"client_id"`
-	ClientSecret string                         `yaml:"client_secret"`
-	RedirectURL  string                         `yaml:"redirect_url"`
-	BaseURL      string                         `yaml:"base_url,omitempty"`    // externally reachable origin; derived from redirect_url when unset
-	Users        map[string]map[string][]string `yaml:"users"`                 // email -> role -> principals
-	Extensions   []string                       `yaml:"extensions,omitempty"`  // global SSH cert extensions; defaults to defaultExtensions when unset
-	Roles        map[string]Role                `yaml:"roles,omitempty"`       // role -> per-role policy (validity, extensions)
-	Services     map[string]ServiceConfig       `yaml:"services,omitempty"`    // service name -> machine credentials for POST /sign
-	DeviceFlow   *DeviceFlowConfig              `yaml:"device_flow,omitempty"` // device authorization flow settings
-	Admin        *AdminConfig                   `yaml:"admin,omitempty"`       // web admin panel at /admin
-	TLS          *TLSConfig                     `yaml:"tls,omitempty"`
+	Addr           string                         `yaml:"addr"`
+	CAKey          string                         `yaml:"ca_key"`
+	CertValidity   string                         `yaml:"cert_validity"`
+	TrustedProxies []string                       `yaml:"trusted_proxies,omitempty"` // peers whose X-Forwarded-* headers are believed
+	ClientID       string                         `yaml:"client_id"`
+	ClientSecret   string                         `yaml:"client_secret"`
+	RedirectURL    string                         `yaml:"redirect_url"`
+	BaseURL        string                         `yaml:"base_url,omitempty"`    // externally reachable origin; derived from redirect_url when unset
+	Users          map[string]map[string][]string `yaml:"users"`                 // email -> role -> principals
+	Extensions     []string                       `yaml:"extensions,omitempty"`  // global SSH cert extensions; defaults to defaultExtensions when unset
+	Roles          map[string]Role                `yaml:"roles,omitempty"`       // role -> per-role policy (validity, extensions)
+	Services       map[string]ServiceConfig       `yaml:"services,omitempty"`    // service name -> machine credentials for POST /sign
+	DeviceFlow     *DeviceFlowConfig              `yaml:"device_flow,omitempty"` // device authorization flow settings
+	Admin          *AdminConfig                   `yaml:"admin,omitempty"`       // web admin panel at /admin
+	TLS            *TLSConfig                     `yaml:"tls,omitempty"`
+
+	// trustedProxies is TrustedProxies compiled to prefixes, prepared once
+	// per load so per-request checks never re-parse strings. It travels with
+	// the Config so a reload swaps policy and prefixes atomically.
+	trustedProxies []netip.Prefix
 }
 
 // validate rejects configs that must not be served. It runs on every load, so
@@ -59,6 +66,16 @@ func (c *Config) validate() error {
 	}
 	if c.Admin != nil && len(c.Admin.Emails) == 0 {
 		return fmt.Errorf("admin: emails must not be empty")
+	}
+	// trusted_proxies is compiled here, not merely checked, so startup and
+	// reload both get the prepared form; a malformed entry rejects the whole
+	// config the same way any other bad field does.
+	for _, entry := range c.TrustedProxies {
+		prefix, err := parseProxyPrefix(entry)
+		if err != nil {
+			return err
+		}
+		c.trustedProxies = append(c.trustedProxies, prefix)
 	}
 	return nil
 }
@@ -394,6 +411,15 @@ func main() {
 		if cfg.TLS == nil || cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
 			log.Printf("WARNING: admin panel enabled without TLS; session cookies travel in cleartext")
 		}
+	}
+
+	tlsOff := cfg.TLS == nil || cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == ""
+	if n := len(cfg.trustedProxies); n > 0 {
+		log.Printf("Trusting X-Forwarded-* headers from %d proxy prefix(es)", n)
+	} else if tlsOff && listensBeyondLoopback(cfg.Addr) {
+		// Either a plaintext service exposed on a network, or a proxy
+		// deployment with the header handling left unconfigured.
+		log.Printf("WARNING: serving plain HTTP on %s with no trusted_proxies — if a reverse proxy fronts voussh, list it in trusted_proxies; if not, consider enabling tls", cfg.Addr)
 	}
 
 	if cfg.TLS != nil && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {

@@ -199,6 +199,49 @@ func TestAdminLogsFeed(t *testing.T) {
 	}
 }
 
+// Behind a TLS-terminating proxy the session cookie must come back Secure —
+// the browser's connection is HTTPS even though voussh's side is not. And an
+// untrusted peer's X-Forwarded-Proto must never flip the flag.
+func TestAdminCookieSecureBehindProxy(t *testing.T) {
+	cfg := testConfig()
+	cfg.Admin = &AdminConfig{Emails: []string{"alice@example.com"}}
+	cfg.TrustedProxies = []string{"192.0.2.1/32"} // httptest's default peer
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("compile trusted_proxies: %v", err)
+	}
+	setupAdminTest(t, cfg)
+
+	mint := func(remote, xfProto string) *http.Cookie {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/callback", nil)
+		if remote != "" {
+			req.RemoteAddr = remote
+		}
+		if xfProto != "" {
+			req.Header.Set("X-Forwarded-Proto", xfProto)
+		}
+		rr := httptest.NewRecorder()
+		handleAdminCallback(rr, req, "alice@example.com")
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == adminCookieName {
+				return c
+			}
+		}
+		t.Fatal("callback did not set a session cookie")
+		return nil
+	}
+
+	if !mint("", "https").Secure {
+		t.Error("cookie not Secure though the trusted proxy reported HTTPS")
+	}
+	if mint("", "").Secure {
+		t.Error("cookie Secure on a plain-HTTP connection with no proxy header")
+	}
+	if mint("203.0.113.9:1234", "https").Secure {
+		t.Error("cookie Secure based on an untrusted peer's header")
+	}
+}
+
 func TestLoadConfigRejectsEmptyAdminEmails(t *testing.T) {
 	path := t.TempDir() + "/config.yaml"
 	writeConfigFile(t, path, configFileBase+"admin:\n  emails: []\n")

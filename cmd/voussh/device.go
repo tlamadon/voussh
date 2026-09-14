@@ -8,7 +8,6 @@ import (
 	"html/template"
 	"log"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -63,18 +62,6 @@ func deviceBaseURL(cfg *Config) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
-}
-
-// clientIP identifies the caller for rate-limiting purposes. It deliberately
-// ignores X-Forwarded-For: voussh does not know whether it sits behind a proxy
-// it can trust, and honouring the header unconditionally would let any caller
-// spoof their way past the limiter.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // parseUserPublicKey decodes and validates an authorized_keys line submitted
