@@ -169,6 +169,7 @@ users:
 | `extensions` | Global SSH cert extensions (optional; defaults to `permit-pty`, `permit-agent-forwarding`, `permit-user-rc`) |
 | `roles` | Per-role policy overrides (optional; each role may set `validity`, `extensions` and/or `source_address`) |
 | `services` | Machine credentials for `POST /sign` (optional — see [Machine authentication](#machine-authentication-sign)) |
+| `admin` | Web admin panel at `/admin` (optional — see [Admin panel](#admin-panel-admin)) |
 | `client_id` | Google OAuth client ID |
 | `client_secret` | Google OAuth client secret |
 | `redirect_url` | OAuth callback URL |
@@ -186,8 +187,9 @@ Config reloaded from config.yaml (3 users, 2 roles, 1 services)
 ```
 
 Hot-reloaded fields: `users`, `cert_validity`, `extensions`, `roles`,
-`services`, and `device_flow.enabled`. These take effect on the next
-certificate issued — a newly added service becomes usable without a restart.
+`services`, `admin.emails`, and `device_flow.enabled`. These take effect on
+the next certificate issued — a newly added service becomes usable without a
+restart.
 
 Changes to `addr`, `tls`, `ca_key`, or the OAuth settings (`client_id`,
 `client_secret`, `redirect_url`) still require a restart — the server logs a
@@ -469,6 +471,32 @@ systemctl enable --now vsh-renew.timer
 Every issuance is logged on the server with the service name, principals,
 certificate serial, key fingerprint, validity window and requesting IP; failed
 token attempts are logged with the source IP.
+
+### Admin panel (`/admin`)
+
+A read-only web page showing what the server is doing: certificate issuances,
+rejected tokens, device-flow activity and config reloads, colour-coded and
+live-updating, with a filter box. Disabled unless configured:
+
+```yaml
+admin:
+  emails: [alice@example.com]   # who may view the panel
+  log_lines: 1000               # recent lines to keep (optional; restart to change)
+```
+
+Opening `/admin` walks through the ordinary Google login; anyone not listed in
+`admin.emails` gets a 403. The session lives in a signed cookie (12h) — no
+server-side state, and a server restart signs everyone out. `admin.emails` is
+checked on every request, so removing someone via the live config reload locks
+them out immediately.
+
+The logs live in a fixed-size in-memory ring: the panel shows the most recent
+`log_lines` lines since the process started, and nothing survives a restart —
+for durable history, keep collecting stderr via journald as usual. Since the
+page rides the same OAuth flow as everything else, no extra Google setup is
+needed, but the panel does display emails, principals and client IPs: treat
+`/admin` like the rest of voussh and keep it off the public internet, ideally
+behind TLS (the server warns at startup if the panel is enabled without it).
 
 ### Session Management
 

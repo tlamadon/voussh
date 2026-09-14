@@ -25,6 +25,14 @@ redirect_url: "http://localhost:8080/callback"
 #   poll_interval: 5s      # minimum spacing between client polls
 #   max_pending: 1024      # cap on concurrent in-flight requests
 
+# Optional: read-only web admin panel at /admin, showing recent server logs
+# (certificate issuances, rejected tokens, config reloads). Access requires
+# the ordinary Google login as one of the listed emails. Logs live in memory
+# only: the panel shows the most recent lines and empties on restart.
+# admin:
+#   emails: [alice@example.com]
+#   log_lines: 1000        # how many recent lines to keep (restart to change)
+
 # Optional: machine (non-interactive) clients of POST /sign. Each service
 # authenticates with a bearer token and receives a certificate for exactly
 # the listed principals. The token is CA-signing capability for those

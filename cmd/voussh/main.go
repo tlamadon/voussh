@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -38,6 +39,7 @@ type Config struct {
 	Roles        map[string]Role                `yaml:"roles,omitempty"`       // role -> per-role policy (validity, extensions)
 	Services     map[string]ServiceConfig       `yaml:"services,omitempty"`    // service name -> machine credentials for POST /sign
 	DeviceFlow   *DeviceFlowConfig              `yaml:"device_flow,omitempty"` // device authorization flow settings
+	Admin        *AdminConfig                   `yaml:"admin,omitempty"`       // web admin panel at /admin
 	TLS          *TLSConfig                     `yaml:"tls,omitempty"`
 }
 
@@ -54,6 +56,9 @@ func (c *Config) validate() error {
 		if err := validateSourceAddress(role.SourceAddress); err != nil {
 			return fmt.Errorf("role %q: %w", name, err)
 		}
+	}
+	if c.Admin != nil && len(c.Admin.Emails) == 0 {
+		return fmt.Errorf("admin: emails must not be empty")
 	}
 	return nil
 }
@@ -133,6 +138,9 @@ type StateData struct {
 	// page. Only the user code travels through the browser — never the device
 	// code, which is the CLI's secret.
 	Device string `json:"d,omitempty"`
+	// Admin marks a login started from the admin panel; the callback sets a
+	// session cookie instead of issuing a certificate.
+	Admin string `json:"a,omitempty"`
 }
 
 // encodeState packs state for the OAuth round trip as compact JSON in base64url.
@@ -246,6 +254,14 @@ func reloadConfig(path string) {
 	if newCfg.DeviceFlow.enabled() != old.DeviceFlow.enabled() {
 		log.Printf("Config reload: device flow %s", map[bool]string{true: "enabled", false: "disabled"}[newCfg.DeviceFlow.enabled()])
 	}
+	// admin.emails is read per request, so it reloads; the ring buffer
+	// capacity is baked in at startup and cannot be.
+	if newCfg.Admin.logLines() != old.Admin.logLines() {
+		log.Printf("Config reload: admin.log_lines changed — restart required to take effect")
+	}
+	if newCfg.Admin.enabled() != old.Admin.enabled() {
+		log.Printf("Config reload: admin panel %s", map[bool]string{true: "enabled", false: "disabled"}[newCfg.Admin.enabled()])
+	}
 
 	configPtr.Store(newCfg)
 	log.Printf("Config reloaded from %s (%d users, %d roles, %d services)", path, len(newCfg.Users), len(newCfg.Roles), len(newCfg.Services))
@@ -299,6 +315,11 @@ func main() {
 	}
 	configPtr.Store(cfg)
 
+	// Tee every log line into the ring buffer the admin panel reads. Done
+	// before any other startup logging so the panel sees it all.
+	initAdmin(cfg)
+	log.SetOutput(io.MultiWriter(os.Stderr, logBuffer))
+
 	caKeyData, err := os.ReadFile(cfg.CAKey)
 	if err != nil {
 		log.Fatal("Failed to read CA key:", err)
@@ -351,6 +372,8 @@ func main() {
 	http.HandleFunc("/device/code", handleDeviceCode)
 	http.HandleFunc("/device/approve", handleDeviceApprove)
 	http.HandleFunc("/device/token", handleDeviceToken)
+	http.HandleFunc("/admin", handleAdmin)
+	http.HandleFunc("/admin/logs", handleAdminLogs)
 
 	log.Printf("voussh %s", version.String())
 
@@ -364,6 +387,13 @@ func main() {
 		}
 	} else {
 		log.Printf("Device flow disabled")
+	}
+
+	if cfg.Admin.enabled() {
+		log.Printf("Admin panel enabled at /admin (%d admins, last %d log lines)", len(cfg.Admin.Emails), cfg.Admin.logLines())
+		if cfg.TLS == nil || cfg.TLS.CertFile == "" || cfg.TLS.KeyFile == "" {
+			log.Printf("WARNING: admin panel enabled without TLS; session cookies travel in cleartext")
+		}
 	}
 
 	if cfg.TLS != nil && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
@@ -513,6 +543,13 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		http.Error(w, "Failed to parse claims", http.StatusInternalServerError)
+		return
+	}
+
+	// A login started from the admin panel returns there, carrying a signed
+	// session cookie instead of a certificate.
+	if stateData.Admin != "" {
+		handleAdminCallback(w, r, claims.Email)
 		return
 	}
 
