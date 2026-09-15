@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"html/template"
 	"net"
 	"net/http"
 	"os"
@@ -297,15 +298,96 @@ func callbackHandler(resultChan chan<- loginResult) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "text/html")
+		renderCallbackSuccess(w, certB64, roleReturned)
+		flushResponse(w)
+
+		resultChan <- loginResult{cert: certB64, role: roleReturned}
+	}
+}
+
+// successPageData feeds the detailed result page.
+type successPageData struct {
+	Email       string
+	Role        string
+	Principals  string
+	Duration    string
+	Until       string
+	Fingerprint string
+}
+
+var successPageTmpl = template.Must(template.New("success").Parse(`<!DOCTYPE html>
+<html><head><title>VSH Login</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 520px; margin: 50px auto; padding: 20px;">
+<h2 style="color: #0a0;">Login Successful!</h2>
+<table style="border-collapse: collapse; margin: 20px 0; width: 100%;">
+<tr><td style="padding: 6px 12px 6px 0; color: #666;">Signed in as</td><td><strong>{{.Email}}</strong></td></tr>
+<tr><td style="padding: 6px 12px 6px 0; color: #666;">Role</td><td>{{.Role}}</td></tr>
+<tr><td style="padding: 6px 12px 6px 0; color: #666;">Principals</td><td>{{.Principals}}</td></tr>
+<tr><td style="padding: 6px 12px 6px 0; color: #666;">Valid for</td><td>{{.Duration}} (until {{.Until}})</td></tr>
+<tr><td style="padding: 6px 12px 6px 0; color: #666;">SSH key</td>
+    <td style="font-family: monospace; font-size: 13px; word-break: break-all;">{{.Fingerprint}}</td></tr>
+</table>
+<p style="color: #666;">The certificate has been saved by the CLI. You can close this window and return to your terminal.</p>
+</body></html>`))
+
+// renderCallbackSuccess writes the result page. When the certificate parses,
+// the page shows what was actually issued — identity, principals, validity —
+// instead of a bare "it worked". Anything unparseable falls back to the
+// plain page: rendering feedback must never break a login the CLI is about
+// to complete.
+func renderCallbackSuccess(w http.ResponseWriter, certB64, role string) {
+	cert := decodeCertB64(certB64)
+	if cert == nil {
 		fmt.Fprint(w, `<!DOCTYPE html>
 <html><body style="font-family: system-ui; text-align: center; padding: 50px;">
 <h2 style="color: #0a0;">Login Successful!</h2>
 <p>You can close this window and return to your terminal.</p>
 </body></html>`)
-		flushResponse(w)
-
-		resultChan <- loginResult{cert: certB64, role: roleReturned}
+		return
 	}
+
+	email, keyIDRole := splitKeyID(cert.KeyId)
+	if role == "" {
+		role = keyIDRole
+	}
+	validBefore := time.Unix(int64(cert.ValidBefore), 0)
+	successPageTmpl.Execute(w, successPageData{
+		Email:       email,
+		Role:        role,
+		Principals:  strings.Join(cert.ValidPrincipals, ", "),
+		Duration:    time.Until(validBefore).Round(time.Minute).String(),
+		Until:       validBefore.Format("15:04 on Jan 2"),
+		Fingerprint: ssh.FingerprintSHA256(cert.Key),
+	})
+}
+
+// decodeCertB64 turns the callback's cert parameter back into a certificate,
+// or nil if any step fails.
+func decodeCertB64(certB64 string) *ssh.Certificate {
+	certData, err := base64.RawURLEncoding.DecodeString(certB64)
+	if err != nil {
+		return nil
+	}
+	parsed, _, _, _, err := ssh.ParseAuthorizedKey(certData)
+	if err != nil {
+		return nil
+	}
+	cert, ok := parsed.(*ssh.Certificate)
+	if !ok {
+		return nil
+	}
+	return cert
+}
+
+// splitKeyID separates a voussh KeyId ("email@role") into its parts. The
+// email itself contains an @, so the role is everything after the LAST one —
+// and a KeyId with only one @ is not in that format at all.
+func splitKeyID(keyID string) (email, role string) {
+	last := strings.LastIndex(keyID, "@")
+	if last == -1 || strings.Index(keyID, "@") == last {
+		return keyID, ""
+	}
+	return keyID[:last], keyID[last+1:]
 }
 
 // flushResponse pushes any buffered response bytes onto the socket.
@@ -502,17 +584,7 @@ func cmdStatus() {
 	}
 
 	// Parse KeyId (format: email@role)
-	keyId := cert.KeyId
-	email := keyId
-	role := ""
-	if idx := strings.LastIndex(keyId, "@"); idx != -1 {
-		// Check if it looks like an email (has @ before another @)
-		firstAt := strings.Index(keyId, "@")
-		if firstAt != idx {
-			email = keyId[:idx]
-			role = keyId[idx+1:]
-		}
-	}
+	email, role := splitKeyID(cert.KeyId)
 
 	fmt.Printf("Session type: %s%s\n", sessionType, serverInfo)
 	fmt.Printf("Logged in as: %s\n", email)

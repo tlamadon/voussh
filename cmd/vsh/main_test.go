@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // flushRecorder is a ResponseWriter that records whether Flush was called,
@@ -45,6 +50,94 @@ func TestCallbackFlushesBeforeSignalling(t *testing.T) {
 				t.Error("resultChan signalled before the response was flushed")
 			}
 		})
+	}
+}
+
+// testCertB64 builds a real signed certificate, encoded the way the voussh
+// server passes it to the callback.
+func testCertB64(t *testing.T, keyID string, principals []string, validity time.Duration) string {
+	t.Helper()
+	_, caPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caSigner, err := ssh.NewSignerFromKey(caPriv)
+	if err != nil {
+		t.Fatalf("build CA signer: %v", err)
+	}
+	userPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate user key: %v", err)
+	}
+	sshPub, err := ssh.NewPublicKey(userPub)
+	if err != nil {
+		t.Fatalf("wrap user key: %v", err)
+	}
+	cert := &ssh.Certificate{
+		Key:             sshPub,
+		CertType:        ssh.UserCert,
+		KeyId:           keyID,
+		ValidPrincipals: principals,
+		ValidAfter:      uint64(time.Now().Add(-5 * time.Minute).Unix()),
+		ValidBefore:     uint64(time.Now().Add(validity).Unix()),
+	}
+	if err := cert.SignCert(rand.Reader, caSigner); err != nil {
+		t.Fatalf("sign cert: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(ssh.MarshalAuthorizedKey(cert))
+}
+
+// The success page must describe the certificate that was issued — who,
+// which principals, for how long — not just say "it worked".
+func TestCallbackPageShowsCertificateDetails(t *testing.T) {
+	certB64 := testCertB64(t, "alice@example.com@deploy", []string{"root", "admin"}, 8*time.Hour)
+
+	resultChan := make(chan loginResult, 1)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/callback?cert="+certB64+"&role=deploy", nil)
+	callbackHandler(resultChan)(rr, req)
+
+	page := rr.Body.String()
+	for _, want := range []string{
+		"alice@example.com", "deploy", "root, admin", "8h0m0s", "SHA256:", "</html>",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page does not mention %q:\n%s", want, page)
+		}
+	}
+
+	// The resultChan contract is untouched: the CLI still receives the raw
+	// base64 certificate to decode and save itself.
+	result := <-resultChan
+	if result.cert != certB64 || result.err != nil {
+		t.Errorf("result = %+v, want the raw cert and no error", result)
+	}
+}
+
+// A cert parameter that does not parse must fall back to the plain success
+// page rather than breaking a login the CLI is about to complete.
+func TestCallbackPageFallsBackOnUnparseableCert(t *testing.T) {
+	resultChan := make(chan loginResult, 1)
+	rr := httptest.NewRecorder()
+	callbackHandler(resultChan)(rr, httptest.NewRequest(http.MethodGet, "/callback?cert=ZmFrZQ", nil))
+	<-resultChan
+
+	page := rr.Body.String()
+	if !strings.Contains(page, "Login Successful!") || !strings.Contains(page, "</html>") {
+		t.Errorf("fallback page is broken:\n%s", page)
+	}
+}
+
+func TestSplitKeyID(t *testing.T) {
+	cases := []struct{ in, email, role string }{
+		{"alice@example.com@deploy", "alice@example.com", "deploy"},
+		{"herdr-hq@service", "herdr-hq@service", ""}, // one @ is not the email@role shape
+		{"no-at-sign", "no-at-sign", ""},
+	}
+	for _, tc := range cases {
+		if email, role := splitKeyID(tc.in); email != tc.email || role != tc.role {
+			t.Errorf("splitKeyID(%q) = %q, %q; want %q, %q", tc.in, email, role, tc.email, tc.role)
+		}
 	}
 }
 
