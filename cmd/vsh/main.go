@@ -24,11 +24,16 @@ var (
 	vshDir    string
 )
 
-func init() {
+func init() { setupConfigDir() }
+
+// setupConfigDir locates vsh's config directory and migrates the pre-XDG
+// config file into it, if there is one.
+func setupConfigDir() {
 	homeDir, _ := os.UserHomeDir()
 	configDir, _ := os.UserConfigDir()
+	// The directory is created by whatever first writes to it, not here:
+	// running vsh must not leave anything on disk by itself.
 	vshDir = filepath.Join(configDir, "voussh")
-	os.MkdirAll(vshDir, 0700)
 
 	// Migrate old config if it exists
 	oldVshDir := filepath.Join(homeDir, ".vsh")
@@ -37,6 +42,7 @@ func init() {
 
 	if _, err := os.Stat(oldConfigPath); err == nil {
 		if data, err := os.ReadFile(oldConfigPath); err == nil {
+			os.MkdirAll(vshDir, 0700)
 			os.WriteFile(newConfigPath, data, 0600)
 			addServerToHistory(strings.TrimSpace(string(data)))
 			os.Remove(oldConfigPath)
@@ -466,6 +472,7 @@ func saveSession(certData []byte, grantedRole string, local bool, rerun string) 
 	}
 
 	configPath := filepath.Join(vshDir, "current_server")
+	os.MkdirAll(vshDir, 0700)
 	os.WriteFile(configPath, []byte(serverURL), 0600)
 
 	fmt.Printf("Login successful! Role: %s\n", grantedRole)
@@ -780,6 +787,7 @@ func addServerToHistory(serverURL string) {
 
 	// Write back to file
 	content := strings.Join(servers, "\n")
+	os.MkdirAll(vshDir, 0700)
 	os.WriteFile(historyPath, []byte(content), 0600)
 }
 

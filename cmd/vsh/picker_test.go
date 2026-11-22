@@ -178,6 +178,69 @@ func TestResolveServerWithoutASavedChoice(t *testing.T) {
 	})
 }
 
+// Starting vsh must leave nothing behind: not even an empty config directory.
+func TestStartupCreatesNothing(t *testing.T) {
+	useTempConfigDir(t) // restores vshDir afterwards
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	setupConfigDir()
+	if vshDir != filepath.Join(home, ".config", "voussh") {
+		t.Skipf("config directory resolves to %s on this platform", vshDir)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Fatalf("startup created %s", entries[0].Name())
+	}
+
+	// The one thing startup may write: an old ~/.vsh/config, carried over.
+	if err := os.MkdirAll(filepath.Join(home, ".vsh"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".vsh", "config"), []byte("https://old.example.com\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	setupConfigDir()
+	if data, err := os.ReadFile(filepath.Join(vshDir, "current_server")); err != nil || strings.TrimSpace(string(data)) != "https://old.example.com" {
+		t.Errorf("old config was not migrated: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".vsh", "config")); !os.IsNotExist(err) {
+		t.Error("old config file was left in place")
+	}
+}
+
+// vsh no longer creates its config directory at startup, so everything that
+// writes there has to be able to create it.
+func TestWritersCreateTheConfigDirectory(t *testing.T) {
+	home := useTempHome(t)
+	writers := map[string]func(){
+		"server history": func() { addServerToHistory("https://ca.example.com") },
+		"default server": func() { saveDefaultServer("https://ca.example.com") },
+		"ssh history":    func() { recordSSHTarget([]string{"web1"}) },
+		"token": func() {
+			saveToken(&tokenRecord{Audience: testAudience, ExpiresAt: time.Now().Add(time.Minute), AccessToken: "t"})
+		},
+		"http key": func() { ensureHTTPKey(defaultHTTPKeyPath()) },
+		"global session": func() {
+			installCert(t, home, "alice@example.com@default", time.Hour)
+			cert, _ := os.ReadFile(filepath.Join(home, ".ssh", "id_ed25519-cert.pub"))
+			saveSession(cert, "default", false, "")
+		},
+	}
+	for name, write := range writers {
+		vshDir = filepath.Join(t.TempDir(), "not", "yet", "there")
+		write()
+		entries, err := os.ReadDir(vshDir)
+		if err != nil || len(entries) == 0 {
+			t.Errorf("%s: nothing was written (%v)", name, err)
+			continue
+		}
+		if info, err := os.Stat(vshDir); err != nil || info.Mode().Perm() != 0700 {
+			t.Errorf("%s: config directory mode = %v, want 700", name, info.Mode().Perm())
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // What gets remembered about a connection
 // ---------------------------------------------------------------------------
