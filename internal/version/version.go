@@ -8,7 +8,7 @@ import (
 
 // Version is overridden at build time via
 //
-//	-ldflags "-X github.com/voussh/voussh/internal/version.Version=<v>".
+//	-ldflags "-X github.com/tlamadon/voussh/internal/version.Version=<v>".
 //
 // When empty, String falls back to the VCS info embedded by the Go toolchain.
 var Version = ""

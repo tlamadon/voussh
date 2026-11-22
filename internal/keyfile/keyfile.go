@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/voussh/voussh/httpcred"
+	"github.com/tlamadon/voussh/httpcred"
 	"golang.org/x/crypto/ssh"
 )
 

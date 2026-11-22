@@ -284,7 +284,7 @@
 
             meta = with pkgs.lib; {
               description = "SSH Certificate Authority server";
-              homepage = "https://github.com/voussh/voussh";
+              homepage = "https://github.com/tlamadon/voussh";
               license = licenses.mit;
               maintainers = [ ];
               mainProgram = "voussh";
@@ -303,7 +303,7 @@
 
             meta = with pkgs.lib; {
               description = "VouSSH client for SSH certificate management";
-              homepage = "https://github.com/voussh/voussh";
+              homepage = "https://github.com/tlamadon/voussh";
               license = licenses.mit;
               maintainers = [ ];
               mainProgram = "vsh";

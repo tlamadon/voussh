@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voussh/voussh/internal/logbuf"
-	"github.com/voussh/voussh/internal/version"
+	"github.com/tlamadon/voussh/internal/logbuf"
+	"github.com/tlamadon/voussh/internal/version"
 )
 
 // AdminConfig switches on the read-only web admin panel at /admin, which

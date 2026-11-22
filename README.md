@@ -629,9 +629,12 @@ then on.
 
 #### 3. Verify requests in the service
 
-In Go, the `httpcred` package does the whole check:
+In Go, the `httpcred` package does the whole check
+(`go get github.com/tlamadon/voussh/httpcred`):
 
 ```go
+import "github.com/tlamadon/voussh/httpcred"
+
 raw, _ := os.ReadFile("voussh-jwks.json")
 keys, _ := httpcred.ParseJWKS(raw)
 verifier, _ := httpcred.NewVerifier(httpcred.VerifierConfig{

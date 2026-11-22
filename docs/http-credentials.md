@@ -597,9 +597,12 @@ answer `401` and do not act on anything in the request.
 
 ### In Go
 
-`httpcred.Verifier` implements steps 1–6 and returns the claims for step 7:
+`httpcred.Verifier` implements steps 1–6 and returns the claims for step 7.
+Add it with `go get github.com/tlamadon/voussh/httpcred`:
 
 ```go
+import "github.com/tlamadon/voussh/httpcred"
+
 raw, _ := os.ReadFile("voussh-jwks.json")           // the pinned keys
 keys, err := httpcred.ParseJWKS(raw)
 verifier, err := httpcred.NewVerifier(httpcred.VerifierConfig{

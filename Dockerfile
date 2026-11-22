@@ -13,7 +13,7 @@ COPY . .
 # Go VCS fallback isn't available here — pass it explicitly).
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build \
-	-ldflags="-s -w -X github.com/voussh/voussh/internal/version.Version=${VERSION}" \
+	-ldflags="-s -w -X github.com/tlamadon/voussh/internal/version.Version=${VERSION}" \
 	-o /out/voussh ./cmd/voussh
 
 # Minimal runtime image. Includes CA certificates for outbound TLS to Google

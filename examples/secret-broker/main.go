@@ -24,7 +24,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/voussh/voussh/httpcred"
+	"github.com/tlamadon/voussh/httpcred"
 )
 
 // secrets maps a name to its value and the roles allowed to read it. This is

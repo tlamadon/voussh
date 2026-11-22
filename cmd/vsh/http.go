@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voussh/voussh/httpcred"
-	"github.com/voussh/voussh/internal/keyfile"
+	"github.com/tlamadon/voussh/httpcred"
+	"github.com/tlamadon/voussh/internal/keyfile"
 )
 
 // headerList collects repeated -H flags.

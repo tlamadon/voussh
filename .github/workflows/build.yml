@@ -47,7 +47,7 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output_name="${output_name}.exe"
         fi
-        go build -ldflags="-s -w -extldflags '-static' -X github.com/voussh/voussh/internal/version.Version=${VERSION}" -o "./bin/${output_name}" ./cmd/voussh
+        go build -ldflags="-s -w -extldflags '-static' -X github.com/tlamadon/voussh/internal/version.Version=${VERSION}" -o "./bin/${output_name}" ./cmd/voussh
 
     - name: Build vsh
       env:
@@ -60,7 +60,7 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then
           output_name="${output_name}.exe"
         fi
-        go build -ldflags="-s -w -extldflags '-static' -X github.com/voussh/voussh/internal/version.Version=${VERSION}" -o "./bin/${output_name}" ./cmd/vsh
+        go build -ldflags="-s -w -extldflags '-static' -X github.com/tlamadon/voussh/internal/version.Version=${VERSION}" -o "./bin/${output_name}" ./cmd/vsh
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4

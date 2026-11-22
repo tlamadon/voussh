@@ -20,7 +20,7 @@ import (
 	"time"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
-	"github.com/voussh/voussh/internal/version"
+	"github.com/tlamadon/voussh/internal/version"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"

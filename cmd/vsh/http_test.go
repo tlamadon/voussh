@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/voussh/voussh/httpcred"
+	"github.com/tlamadon/voussh/httpcred"
 )
 
 // fakeBroker is a relying service: it authenticates every request with the

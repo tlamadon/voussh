@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voussh/voussh/internal/version"
+	"github.com/tlamadon/voussh/internal/version"
 	"golang.org/x/crypto/ssh"
 )
 

@@ -1,4 +1,4 @@
-module github.com/voussh/voussh
+module github.com/tlamadon/voussh
 
 go 1.24.0
 
