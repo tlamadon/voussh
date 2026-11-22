@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -9,6 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -212,5 +216,94 @@ func TestCallbackPageSurvivesShutdown(t *testing.T) {
 				t.Error("failure path did not report an error")
 			}
 		})
+	}
+}
+
+// runInitFunction sources the output of `vsh init` in bash and runs a script
+// against a stand-in vsh binary. PATH holds that binary and nothing else —
+// in particular no `which` — as on a minimal machine or in a build sandbox.
+func runInitFunction(t *testing.T, stub, script string, args ...string) string {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vsh"), []byte(stub), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// cmdInit prints to stdout; borrow it for a moment.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	cmdInit()
+	os.Stdout = stdout
+	w.Close()
+	initScript, _ := io.ReadAll(r)
+	initPath := filepath.Join(dir, "init.sh")
+	if err := os.WriteFile(initPath, initScript, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A function that calls itself recurses until bash dies; do not wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bash, append([]string{"-c", ". \"$1\"; shift\n" + script, "bash", initPath}, args...)...)
+	cmd.Env = []string{"PATH=" + dir, "BASH=" + bash, "HOME=" + dir}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("shell failed: %v\n%s", err, out)
+	}
+	return string(out)
+}
+
+// The shell function must reach the binary and not itself, including when
+// there is no `which` to ask and when it has been defined twice.
+func TestInitShellFunctionReachesTheBinary(t *testing.T) {
+	stub := `#!/bin/sh
+case "$*" in
+  "login --local") [ "$VSH_EVAL_MODE" = 1 ] && echo "export VSH_LOCAL_CERT='cert'" ;;
+  *) echo "binary: $*" ;;
+esac
+`
+	script := `
+vsh ssh web1
+. "$1"
+vsh status
+vsh login --local >/dev/null; echo "local cert: [$VSH_LOCAL_CERT]"
+vsh logout
+vsh logout
+`
+	// The script is handed the init file a second time, to define the
+	// function again over itself.
+	dir := t.TempDir()
+	again := filepath.Join(dir, "init-again.sh")
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	cmdInit()
+	os.Stdout = stdout
+	w.Close()
+	initScript, _ := io.ReadAll(r)
+	if err := os.WriteFile(again, initScript, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runInitFunction(t, stub, script, again)
+	want := `binary: ssh web1
+binary: status
+local cert: [cert]
+Local session cleared
+binary: logout
+`
+	if got != want {
+		t.Errorf("shell session:\n%s\nwant:\n%s", got, want)
 	}
 }

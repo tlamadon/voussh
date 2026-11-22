@@ -136,10 +136,10 @@ func cmdInit() {
 	fmt.Print(`# VSH Shell Function - provides seamless local session support
 # Add this to your shell profile with: eval "$(vsh init)"
 
-# Find the vsh binary path
-_VSH_BIN="$(which vsh 2>/dev/null || echo vsh)"
-
-# Main vsh function that wraps the binary
+# Main vsh function that wraps the binary. It reaches the binary with
+# "command vsh", which skips shell functions; looking the path up instead
+# (with which) made the function call itself forever wherever which was
+# missing or, once the function existed, described the function.
 vsh() {
     local cmd="$1"
 
@@ -149,19 +149,19 @@ vsh() {
             if [[ " ${@:2} " =~ " --local " ]]; then
                 # Local login - capture the certificate in environment
                 local output
-                output=$(VSH_EVAL_MODE=1 "$_VSH_BIN" "$@" 2>&1)
+                output=$(VSH_EVAL_MODE=1 command vsh "$@" 2>&1)
                 if [ $? -eq 0 ]; then
                     # Execute the exports in the current shell
                     eval "$output"
                     echo "Local session created successfully!"
-                    "$_VSH_BIN" status
+                    command vsh status
                 else
                     echo "$output"
                     return 1
                 fi
             else
                 # Global login - just run the command normally
-                "$_VSH_BIN" "$@"
+                command vsh "$@"
             fi
             ;;
         logout)
@@ -172,12 +172,12 @@ vsh() {
                 echo "Local session cleared"
             else
                 # Global logout
-                "$_VSH_BIN" logout
+                command vsh logout
             fi
             ;;
         *)
             # All other commands pass through
-            "$_VSH_BIN" "$@"
+            command vsh "$@"
             ;;
     esac
 }
