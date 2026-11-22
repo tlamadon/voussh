@@ -313,20 +313,21 @@ func cmdTokenLogin(args []string) {
 		opts.Mode = tokenModeDevice
 	}
 
-	if opts.Server == "" {
-		opts.Server = serverURL
-	}
-	if opts.Server == "" {
-		if opts.Mode == tokenModeService {
+	if opts.Mode == tokenModeService {
+		// A machine identity never prompts, and its server is not a choice
+		// to remember on a human's behalf.
+		if opts.Server == "" {
+			opts.Server = serverURL
+		}
+		if opts.Server == "" {
 			fatalf("No server configured. Use --server or set VSH_SERVER.")
 		}
-		selected, err := selectServer()
+	} else {
+		resolved, err := resolveServer(opts.Server, true)
 		if err != nil {
 			fatalf("Error: %v", err)
 		}
-		opts.Server = selected
-	}
-	if opts.Mode != tokenModeService {
+		opts.Server = resolved
 		addServerToHistory(opts.Server)
 	}
 

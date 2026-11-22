@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"flag"
@@ -13,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -47,7 +45,26 @@ func init() {
 }
 
 func main() {
+	// The server commands talk to unless told otherwise: the environment,
+	// then the saved default, then (for installs that predate the saved
+	// default) wherever the current certificate came from.
+	serverURL = normalizeServerURL(os.Getenv("VSH_SERVER"))
+	if serverURL == "" {
+		serverURL = loadDefaultServer()
+	}
+	if serverURL == "" {
+		if data, err := os.ReadFile(filepath.Join(vshDir, "current_server")); err == nil {
+			serverURL = normalizeServerURL(string(data))
+		}
+	}
+
+	// With no arguments, an interactive vsh opens the host picker. Anything
+	// else that runs it bare (a script, a pipe) gets the usage text, as before.
 	if len(os.Args) < 2 {
+		if isTerminal(os.Stdin) && isTerminal(os.Stderr) {
+			cmdPick()
+			return
+		}
 		printUsage()
 		os.Exit(1)
 	}
@@ -60,16 +77,11 @@ func main() {
 		return
 	}
 
-	// Load server URL from config
-	serverURL = os.Getenv("VSH_SERVER")
-	if serverURL == "" {
-		configPath := filepath.Join(vshDir, "current_server")
-		if data, err := os.ReadFile(configPath); err == nil {
-			serverURL = strings.TrimSpace(string(data))
-		}
-	}
-
 	switch cmd {
+	case "help", "--help", "-h":
+		printUsage()
+	case "server":
+		cmdServer(args)
 	case "init":
 		cmdInit()
 	case "login":
@@ -96,9 +108,11 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: vsh <command> [options]")
+	fmt.Println("Usage: vsh                      Pick a host and connect (logs in first if needed)")
+	fmt.Println("       vsh <command> [options]")
 	fmt.Println()
 	fmt.Println("Commands:")
+	fmt.Println("  server  Show or change the server vsh uses (saved after the first login)")
 	fmt.Println("  init    Output shell function for local session support")
 	fmt.Println("  login   Login and obtain SSH certificate (use --device when there is no local browser)")
 	fmt.Println("  renew   Renew a certificate using a service token (non-interactive, for timers)")
@@ -175,17 +189,14 @@ func cmdLogin(args []string) {
 	deviceFlow := fs.Bool("device", false, "Approve from another device instead of a local browser")
 	fs.Parse(args)
 
-	// If no server specified, use history or prompt
-	if *server == "" {
-		selectedServer, err := selectServer()
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			os.Exit(1)
-		}
-		*server = selectedServer
+	// --server, then $VSH_SERVER, then the saved server. Only when none of
+	// those exists is the user asked, and the answer is kept.
+	resolved, err := resolveServer(*server, true)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
 	}
-
-	serverURL = *server
+	serverURL = resolved
 
 	// Add to server history
 	addServerToHistory(serverURL)
@@ -634,6 +645,9 @@ func cmdSSH(args []string) {
 		}
 	}
 
+	// Remember where this connection goes, for the picker.
+	recordSSHTarget(args)
+
 	homeDir, _ := os.UserHomeDir()
 	keyPath := filepath.Join(homeDir, ".ssh", "id_ed25519")
 
@@ -788,63 +802,4 @@ func getServerHistory() []string {
 	}
 
 	return servers
-}
-
-// selectServer prompts the user to select a server from history or enter a new one
-func selectServer() (string, error) {
-	servers := getServerHistory()
-
-	if len(servers) == 0 {
-		fmt.Print("Enter server URL: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(input), nil
-	}
-
-	if len(servers) == 1 {
-		fmt.Printf("Using server: %s\n", servers[0])
-		return servers[0], nil
-	}
-
-	// Multiple servers - show menu
-	fmt.Println("Select a server:")
-	for i, server := range servers {
-		fmt.Printf("  %d) %s\n", i+1, server)
-	}
-	fmt.Printf("  %d) Enter new server URL\n", len(servers)+1)
-
-	fmt.Print("Choice [1]: ")
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-
-	choice := strings.TrimSpace(input)
-	if choice == "" {
-		choice = "1"
-	}
-
-	choiceNum, err := strconv.Atoi(choice)
-	if err != nil {
-		return "", fmt.Errorf("invalid choice: %s", choice)
-	}
-
-	if choiceNum >= 1 && choiceNum <= len(servers) {
-		return servers[choiceNum-1], nil
-	}
-
-	if choiceNum == len(servers)+1 {
-		fmt.Print("Enter server URL: ")
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(input), nil
-	}
-
-	return "", fmt.Errorf("invalid choice: %d", choiceNum)
 }

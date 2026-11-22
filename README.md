@@ -237,6 +237,9 @@ This creates a shell function that wraps the vsh binary and enables seamless loc
 #### Usage
 
 ```bash
+# Pick a host and connect — logs in first if the certificate has expired
+vsh
+
 # Login and obtain SSH certificate (global session)
 vsh login --server http://localhost:8080
 
@@ -268,9 +271,56 @@ vsh pubkey
 vsh token login --audience secret-broker
 vsh http https://broker.example.com/v1/secrets/db-password
 
+# Show or change the server vsh uses
+vsh server
+vsh server https://ca.example.com
+
 # Show version
 vsh version
 ```
+
+#### Choosing a server
+
+`vsh` uses one server and remembers it. The first `vsh login` asks which one
+(or takes it from `--server`) and saves the answer; every later command uses
+it without asking.
+
+```bash
+vsh server                          # show it
+vsh server https://ca.example.com   # use this one from now on
+vsh server --pick                   # choose among servers used before
+vsh server --clear                  # forget it; the next login asks again
+```
+
+`--server` on a command and the `VSH_SERVER` environment variable override the
+saved server for that invocation without changing it. `vsh logout` removes the
+certificate but keeps the server.
+
+#### Host picker
+
+Running `vsh` with no arguments opens a picker instead of printing the usage:
+
+```
+vsh ssh> web
+  2/7
+> root@web1 -p 2222
+  web2
+```
+
+The list is your recent `vsh ssh` connections, most recent first and with the
+user and options you used, followed by the `Host` entries from
+`~/.ssh/config` (including files pulled in with `Include`; wildcard patterns
+are skipped). Pick an entry to connect, or type a new `[user@]host` — with ssh
+options if you like — and press Enter. Esc cancels.
+
+Before connecting, `vsh` checks the certificate. If there is none or it has
+expired, it runs the login first — for the same role as the expired
+certificate, and with the device flow when you are in an SSH session — and
+then connects.
+
+The picker uses [`fzf`](https://github.com/junegunn/fzf) when it is installed
+and falls back to a numbered prompt when it is not. It only opens on a
+terminal: a bare `vsh` in a script or pipe prints the usage as before.
 
 ### Device Flow (headless and remote machines)
 
