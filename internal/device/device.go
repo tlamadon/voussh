@@ -81,6 +81,19 @@ func (s State) String() string {
 	return "unknown"
 }
 
+// Kind names the credential format a request is for. The store itself is
+// format-agnostic — it carries opaque key and credential bytes — so a new
+// format needs a new Kind and nothing else in this package.
+type Kind string
+
+const (
+	// KindSSH is an SSH user certificate. It is the zero value, so requests
+	// created before other kinds existed keep meaning what they always did.
+	KindSSH Kind = ""
+	// KindJWT is a proof-of-possession access token for an HTTP service.
+	KindJWT Kind = "jwt"
+)
+
 // userCodeAlphabet is the 20-consonant set recommended by RFC 8628 §6.1. It
 // omits vowels so generated codes cannot spell words, and omits the digits and
 // letters people confuse when transcribing by hand (0/O, 1/I/L).
@@ -101,10 +114,18 @@ type Request struct {
 	// UserCode is the short code the human transcribes.
 	UserCode string
 
-	// PubKey is the authorized_keys line the CLI wants signed, bound at
-	// creation time. Fingerprint is its SSH fingerprint, shown on the approval
-	// page so the approver can confirm the request came from their machine and
-	// not from an attacker who phished them into approving it.
+	// Kind is the credential format requested, fixed at creation time.
+	Kind Kind
+	// Audience is the HTTP service a KindJWT credential is for. Like the key,
+	// it is bound when the request is created and shown on the approval page;
+	// it is empty for KindSSH.
+	Audience string
+
+	// PubKey is the public key the CLI wants a credential for, bound at
+	// creation time: an authorized_keys line for KindSSH, a JWK for KindJWT.
+	// Fingerprint identifies it, and is shown on the approval page so the
+	// approver can confirm the request came from their machine and not from
+	// an attacker who phished them into approving it.
 	PubKey      []byte
 	Fingerprint string
 	Role        string
@@ -122,7 +143,8 @@ type Request struct {
 	// user code for.
 	ApprovalToken string
 
-	// Cert is the signed certificate, set on approval.
+	// Cert is the issued credential, set on approval: the signed certificate
+	// for KindSSH, the access token for KindJWT.
 	Cert []byte
 
 	lastPoll time.Time
@@ -194,10 +216,25 @@ func (s *Store) Len() int {
 	return len(s.byDevice)
 }
 
-// Create mints a new request for the given public key. pubKey is the raw
-// authorized_keys line and fingerprint its SSH fingerprint; the caller parses
-// and validates the key so this package stays free of SSH specifics.
+// Spec is what a client asks for when it starts a request. The caller parses
+// and validates the key (and, for KindJWT, the audience) so this package
+// stays free of format specifics.
+type Spec struct {
+	Kind        Kind
+	Audience    string
+	PubKey      []byte
+	Fingerprint string
+	Role        string
+}
+
+// Create mints a new SSH certificate request for the given public key. pubKey
+// is the raw authorized_keys line and fingerprint its SSH fingerprint.
 func (s *Store) Create(pubKey []byte, fingerprint, role string) (Request, error) {
+	return s.CreateSpec(Spec{PubKey: pubKey, Fingerprint: fingerprint, Role: role})
+}
+
+// CreateSpec mints a new request for any credential kind.
+func (s *Store) CreateSpec(spec Spec) (Request, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -211,9 +248,11 @@ func (s *Store) Create(pubKey []byte, fingerprint, role string) (Request, error)
 
 	now := s.now()
 	req := &Request{
-		PubKey:      pubKey,
-		Fingerprint: fingerprint,
-		Role:        role,
+		Kind:        spec.Kind,
+		Audience:    spec.Audience,
+		PubKey:      spec.PubKey,
+		Fingerprint: spec.Fingerprint,
+		Role:        spec.Role,
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(s.ttl),
 		State:       Pending,

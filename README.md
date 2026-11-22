@@ -2,12 +2,15 @@
 
 A stateless, lightweight SSH Certificate Authority server and client that authenticates users via Google OAuth and issues short-lived SSH certificates based on role assignments. 
 
+The same login can also issue short-lived, key-bound **HTTP credentials** (Ed25519-signed JWTs with DPoP) that your own services verify offline — see [HTTP credentials](#http-credentials-jwt--dpop).
+
 ## Features
 
 - 🔐 **Google OAuth authentication** - Leverage existing Google Workspace identities
 - 🎫 **Short-lived certificates** - Time-bound certificates reduce security risks
 - 👥 **Role-based access** - Map users to roles with specific SSH principals
 - 📱 **Device flow** - Log in on a headless or remote machine by approving from your phone or laptop
+- 🪪 **HTTP credentials** - Optional proof-of-possession JWTs for HTTP services, verified offline against a pinned key
 - 🚀 **Stateless server** - Horizontally scalable, no session storage
 - 🔧 **Simple setup** - Minimal configuration required
 - 🌐 **HTTPS support** - Optional TLS for secure deployments
@@ -39,6 +42,12 @@ A stateless, lightweight SSH Certificate Authority server and client that authen
 # Start with custom config file
 ./voussh --config /etc/voussh/config.yaml
 
+# Generate a token signing key pair (only needed for HTTP credentials)
+./voussh jwt-init [path]
+
+# Print the public token verification keys (JWKS), without starting the server
+./voussh jwks --config /etc/voussh/config.yaml
+
 # Show help
 ./voussh --help
 ```
@@ -48,6 +57,7 @@ The server provides:
 - OAuth callback endpoint: `/callback`
 - CA public key endpoint: `/pubkey`
 - Health check endpoint: `/health`
+- Token verification keys: `/.well-known/jwks.json` (only with a `jwt:` block)
 
 ### Running with Docker
 
@@ -171,6 +181,7 @@ users:
 | `roles` | Per-role policy overrides (optional; each role may set `validity`, `extensions` and/or `source_address`) |
 | `services` | Machine credentials for `POST /sign` (optional — see [Machine authentication](#machine-authentication-sign)) |
 | `admin` | Web admin panel at `/admin` (optional — see [Admin panel](#admin-panel-admin)) |
+| `jwt` | HTTP credential issuance (optional; off when absent — see [HTTP credentials](#http-credentials-jwt--dpop)) |
 | `client_id` | Google OAuth client ID |
 | `client_secret` | Google OAuth client secret |
 | `redirect_url` | OAuth callback URL |
@@ -188,9 +199,10 @@ Config reloaded from config.yaml (3 users, 2 roles, 1 services)
 ```
 
 Hot-reloaded fields: `users`, `cert_validity`, `extensions`, `roles`,
-`services`, `admin.emails`, `trusted_proxies`, and `device_flow.enabled`.
-These take effect on the next certificate issued — a newly added service
-becomes usable without a restart.
+`services`, `admin.emails`, `trusted_proxies`, `device_flow.enabled`, and the
+whole `jwt` block (including its key files, which are re-read on every
+reload). These take effect on the next credential issued — a newly added
+service becomes usable without a restart.
 
 Changes to `addr`, `tls`, `ca_key`, or the OAuth settings (`client_id`,
 `client_secret`, `redirect_url`) still require a restart — the server logs a
@@ -251,6 +263,10 @@ vsh ssh user@hostname -L 8080:localhost:80
 
 # Get CA public key (for server configuration)
 vsh pubkey
+
+# Obtain an HTTP credential and use it (see "HTTP credentials")
+vsh token login --audience secret-broker
+vsh http https://broker.example.com/v1/secrets/db-password
 
 # Show version
 vsh version
@@ -472,6 +488,283 @@ systemctl enable --now vsh-renew.timer
 Every issuance is logged on the server with the service name, principals,
 certificate serial, key fingerprint, validity window and requesting IP; failed
 token attempts are logged with the source IP.
+
+### HTTP credentials (JWT + DPoP)
+
+SSH certificates let `sshd` trust a user without calling anyone. HTTP
+credentials do the same for your own HTTP services — a secret broker, an
+internal API — so they can authenticate users and agents **without an SSH
+connection and without contacting voussh or Google at request time**.
+
+A credential is a short-lived JWT signed with Ed25519 (`alg: EdDSA`) and bound
+to a key held by the client. Every request carries the token plus a
+[DPoP](https://datatracker.ietf.org/doc/html/rfc9449) proof signed with that
+key, so a token lifted from a log or a proxy is useless on its own. The
+service verifies both against a public key it keeps in a local file.
+
+The feature is off unless the config has a `jwt:` block, and enabling it
+changes nothing about SSH issuance. The full reference — token format,
+policy rules, key rotation and the verification contract — is in
+[docs/http-credentials.md](docs/http-credentials.md). What follows is a
+complete walk-through.
+
+#### 1. Enable issuance
+
+Generate a signing key. It is separate from the SSH CA key on purpose:
+
+```bash
+voussh jwt-init /etc/voussh/jwt_ed25519
+```
+
+```
+Token signing key pair generated:
+  Private key: /etc/voussh/jwt_ed25519
+  Public key:  /etc/voussh/jwt_ed25519.pub
+  Key ID:      bRqsG43ZHkEYuHn0iTswlvwHGuRSKH2yzktN8saTFsc
+```
+
+Say which services tokens may be issued for, and which roles each admits:
+
+```yaml
+users:
+  alice@example.com:
+    default: [alice]
+    admin: [root]
+
+jwt:
+  issuer: "https://auth.example.com"
+  signing_key: "/etc/voussh/jwt_ed25519"
+  validity: 15m                 # default 15m, maximum 24h
+  audiences:
+    secret-broker:
+      allowed_roles: [default, admin]
+```
+
+A user gets a token for an audience in a role only if the audience is listed,
+the user holds the role under `users`, **and** the audience allows that role.
+Anything else is refused: a client cannot name an arbitrary audience, ask for
+a role it does not hold, or set any claim itself. The SSH principals attached
+to a role play no part — the token does not contain them, and a role may map
+to `[]` to make it HTTP-only.
+
+The block is picked up by the live reload; no restart is needed.
+
+#### 2. Pin the verification key in the service
+
+Export the public keys — offline, straight from the config:
+
+```bash
+voussh jwks --config /etc/voussh/config.yaml > voussh-jwks.json
+```
+
+```json
+{
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "7n7fpGdVP5XCkQTMMXGrnD6IcuGs2dwkyIGd1d8VF3w",
+      "kid": "bRqsG43ZHkEYuHn0iTswlvwHGuRSKH2yzktN8saTFsc",
+      "alg": "EdDSA",
+      "use": "sig"
+    }
+  ]
+}
+```
+
+Ship `voussh-jwks.json` with the broker like any other trust anchor. The same
+document is served at `GET /.well-known/jwks.json`, but the broker never needs
+to fetch it: it reads the file at startup and is independent of voussh from
+then on.
+
+#### 3. Verify requests in the service
+
+In Go, the `httpcred` package does the whole check:
+
+```go
+raw, _ := os.ReadFile("voussh-jwks.json")
+keys, _ := httpcred.ParseJWKS(raw)
+verifier, _ := httpcred.NewVerifier(httpcred.VerifierConfig{
+    Issuer:   "https://auth.example.com",   // must match jwt.issuer
+    Audience: "secret-broker",              // this service's own name
+    Keys:     keys,                         // the pinned keys
+    Origin:   "https://broker.example.com", // how clients address this service
+})
+
+http.HandleFunc("/v1/secrets/", func(w http.ResponseWriter, r *http.Request) {
+    claims, err := verifier.VerifyHTTP(r)
+    if err != nil {
+        log.Printf("rejected: %v", err)
+        http.Error(w, "unauthorized", http.StatusUnauthorized)
+        return
+    }
+    // Authenticated. Authorization is the broker's own business:
+    //   claims.Subject      "alice@example.com"
+    //   claims.SubjectType  "user" (or "service")
+    //   claims.Role         "default"
+})
+```
+
+`VerifyHTTP` checks the token's signature against the pinned key, the issuer,
+the audience and the validity window; then the DPoP proof's signature, that
+its key is the one the token is bound to, that it names this method and URL
+and hashes this token, that it is fresh, and that it has not been seen before.
+None of it touches the network.
+
+[`examples/secret-broker`](examples/secret-broker/main.go) is this, runnable:
+
+```bash
+go run ./examples/secret-broker --jwks voussh-jwks.json \
+    --issuer https://auth.example.com --audience secret-broker \
+    --origin http://localhost:9000
+```
+
+For a service in another language, [the verification contract](docs/http-credentials.md#offline-verification-contract)
+lists every check, and [`httpcred/testdata/vectors.json`](httpcred/testdata/vectors.json)
+has 23 request vectors — valid tokens, forged signatures, wrong issuer and
+audience, expired tokens, mismatched keys, stale and replayed proofs — to run
+an implementation against.
+
+#### 4. Get a token
+
+```bash
+vsh token login --server https://auth.example.com --audience secret-broker
+```
+
+```
+Generated a new key for HTTP credentials at /home/you/.config/voussh/http_ed25519
+Opening browser for authentication...
+Login URL: https://auth.example.com/login?audience=secret-broker&cli_port=41873&...
+
+The approval page should show:
+    Audience:    secret-broker
+    Client key:  ggnw6G5DgAodPO-A8-gXCtFmFImXop9r5MIZ2AIXInE
+
+Waiting for approval on localhost:41873...
+```
+
+After the Google sign-in, voussh shows a confirmation page before issuing
+anything:
+
+```
+Issue an HTTP credential?
+
+Signed in as alice@example.com.
+
+  Audience     secret-broker
+  Role         default
+  Valid for    15m0s
+  Client key   ggnw6G5DgAodPO-A8-gXCtFmFImXop9r5MIZ2AIXInE
+
+  [ Approve ]  [ Reject ]
+```
+
+Check the audience and that the key matches your terminal, then approve:
+
+```
+Token saved for audience secret-broker
+  Identity: alice@example.com
+  Role:     default
+  Expires:  14:32:10 on Nov 21 (in 15m0s)
+```
+
+On a machine with no browser, add `--device` and approve from your phone,
+exactly as with `vsh login --device`. Add `--role admin` to request a
+different role.
+
+On first use `vsh` generates an Ed25519 key at
+`~/.config/voussh/http_ed25519` (on macOS, under
+`~/Library/Application Support/voussh`). Only its public half is sent to
+voussh; the private key never leaves the machine. The token is stored next to
+it under `tokens/`, readable only by you.
+
+#### 5. Use it
+
+```bash
+vsh http https://broker.example.com/v1/secrets/db-password
+```
+
+```json
+{"name":"db-password","value":"correct horse battery staple"}
+```
+
+`vsh http` attaches `Authorization: DPoP <token>` and a single-use proof for
+exactly this method and URL. It takes the usual `-X`, `-H` and `-d` (`-d @file`,
+`-d @-`), writes the body to stdout, and exits non-zero on an HTTP error —
+with the error on stderr, so it is safe in `$(...)`.
+
+```bash
+vsh token status     # audience, identity, role, expiry — never the token itself
+vsh token renew      # when it has expired: the same login again
+vsh token logout
+```
+
+What the broker sees, and what a thief does not get:
+
+```bash
+URL=https://broker.example.com/v1/secrets/db-password
+TOKEN=$(vsh token print)        # the raw token, only because we asked for it
+
+curl -H "Authorization: Bearer $TOKEN" "$URL"                        # 401: not a bearer token
+curl -H "Authorization: DPoP $TOKEN" "$URL"                          # 401: no proof
+
+PROOF=$(vsh token proof --method GET "$URL")
+curl -H "Authorization: DPoP $TOKEN" -H "DPoP: $PROOF" "$URL"        # 200
+curl -H "Authorization: DPoP $TOKEN" -H "DPoP: $PROOF" "$URL"        # 401: proof replayed
+```
+
+`vsh token print` and `vsh token proof` exist for tools that cannot go through
+`vsh http`. Nothing else prints a token, and no command accepts one as an
+argument.
+
+#### Agents and other machine identities
+
+A daemon authenticates with a voussh service token, as it does for
+[`/sign`](#machine-authentication-sign). Token rights are granted separately
+and explicitly — a service that can request SSH certificates gets no tokens
+unless an audience names it, and a service can be token-only:
+
+```yaml
+services:
+  ci-runner:
+    token_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    # no principals: this identity cannot obtain SSH certificates at all
+
+jwt:
+  audiences:
+    secret-broker:
+      allowed_roles: [default, admin]
+      services:
+        ci-runner: [deploy]        # the roles this service may request
+```
+
+```bash
+vsh token login --server https://auth.example.com --audience secret-broker \
+    --service-token-file /var/lib/ci/voussh-token
+vsh http https://broker.example.com/v1/secrets/deploy-key
+```
+
+The broker sees `sub: "service:ci-runner"`, `sub_type: "service"`,
+`role: "deploy"`. No human is involved, so `vsh http` renews an expired token
+by itself; there is nothing to schedule.
+
+#### Rotating the signing key
+
+voussh signs with one key and can publish several. Add the new public key
+under `jwt.verification_keys`, redeploy the exported JWKS to your services,
+switch `signing_key`, and drop the old key once its last token has expired.
+Each step is a config reload. The procedure is spelled out in
+[docs/http-credentials.md](docs/http-credentials.md#rotating).
+
+#### What this does not give you
+
+**Immediate revocation.** Because services verify offline, voussh cannot
+reach out and cancel a token. Removing a user or a role stops *new* tokens;
+ones already issued work until they expire. The token lifetime — 15 minutes
+by default, 24 hours at most — is the revocation delay, so set it to how long
+you are willing to wait. Anything faster needs an additional mechanism such
+as a denylist distributed to services, which this design deliberately leaves
+out. See [Limitations](docs/http-credentials.md#limitations).
 
 ### Admin panel (`/admin`)
 
@@ -884,8 +1177,9 @@ This enables the `vsh login --local` command for shell-specific sessions.
 
 ## Architecture
 
-- **voussh**: Server that handles OAuth flow and signs SSH certificates
+- **voussh**: Server that handles OAuth flow and signs SSH certificates — and, optionally, HTTP credentials
 - **vsh**: CLI client for authentication and certificate management
+- **httpcred**: Go package with the HTTP credential format and an offline verifier for relying services
 - Certificates are signed during the OAuth callback flow
 - Principals are assigned based on the requested role
 - All certificates are time-limited (default 8 hours)
@@ -1062,6 +1356,8 @@ The server logs will show:
 - **OAuth security**: Leverages Google's OAuth 2.0 implementation
 - **Certificate transparency**: All certificates include email and role in KeyId (service certificates use `<name>@service`)
 - **Service tokens are CA capability**: A `/sign` token mints certificates for its principals — protect it like a private key, pin it with `source_address`, and never expose the server to the internet
+- **Separate keys per protocol**: HTTP credentials are signed with `jwt.signing_key`, never with the SSH CA key; rotating or losing one does not affect the other
+- **HTTP credentials are key-bound, not revocable**: A token is useless without the client's private key (DPoP), but cannot be cancelled before it expires — keep `jwt.validity` short
 
 ## Contributing
 

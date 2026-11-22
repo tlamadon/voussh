@@ -42,6 +42,7 @@ type Config struct {
 	Services       map[string]ServiceConfig       `yaml:"services,omitempty"`    // service name -> machine credentials for POST /sign
 	DeviceFlow     *DeviceFlowConfig              `yaml:"device_flow,omitempty"` // device authorization flow settings
 	Admin          *AdminConfig                   `yaml:"admin,omitempty"`       // web admin panel at /admin
+	JWT            *JWTConfig                     `yaml:"jwt,omitempty"`         // HTTP credential (JWT) issuance; off when absent
 	TLS            *TLSConfig                     `yaml:"tls,omitempty"`
 
 	// trustedProxies is TrustedProxies compiled to prefixes, prepared once
@@ -57,6 +58,18 @@ func (c *Config) validate() error {
 	for name, svc := range c.Services {
 		if err := svc.validate(); err != nil {
 			return fmt.Errorf("service %q: %w", name, err)
+		}
+		// A service must be able to obtain something. Principals are only
+		// optional for one that exists to request HTTP credentials — which
+		// keeps a token-only machine identity from having to be handed SSH
+		// access it does not need.
+		if len(svc.Principals) == 0 && !c.JWT.grantsService(name) {
+			return fmt.Errorf("service %q: principals must not be empty (unless a jwt audience grants the service a role)", name)
+		}
+	}
+	if c.JWT != nil {
+		if err := c.JWT.validate(c.Services); err != nil {
+			return fmt.Errorf("jwt: %w", err)
 		}
 	}
 	for name, role := range c.Roles {
@@ -151,6 +164,13 @@ type StateData struct {
 	Port   string `json:"p,omitempty"`
 	Role   string `json:"r,omitempty"`
 	Pubkey string `json:"k,omitempty"`
+	// Audience and JWK mark a login that asks for an HTTP credential instead
+	// of a certificate: the service the token is for, and the client's public
+	// key as a canonical JWK. Nonce is an opaque value the CLI uses to
+	// recognise its own login when the browser comes back.
+	Audience string `json:"u,omitempty"`
+	JWK      string `json:"j,omitempty"`
+	Nonce    string `json:"n,omitempty"`
 	// Device carries the user code when the login was started from the device
 	// page. Only the user code travels through the browser — never the device
 	// code, which is the CLI's secret.
@@ -208,6 +228,17 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
+	}
+	// Keys are read on every load, so a reload rotates them together with
+	// the policy, and a key that cannot be read rejects the reload instead of
+	// leaving the server with policy and keys out of step.
+	if cfg.JWT != nil {
+		if err := cfg.JWT.loadKeys(); err != nil {
+			return nil, fmt.Errorf("jwt: %w", err)
+		}
+		if err := cfg.JWT.rejectCAKey(cfg.CAKey); err != nil {
+			return nil, fmt.Errorf("jwt: %w", err)
+		}
 	}
 	return &cfg, nil
 }
@@ -280,6 +311,13 @@ func reloadConfig(path string) {
 		log.Printf("Config reload: admin panel %s", map[bool]string{true: "enabled", false: "disabled"}[newCfg.Admin.enabled()])
 	}
 
+	// The whole jwt block reloads, keys included.
+	if newCfg.jwtEnabled() != old.jwtEnabled() {
+		log.Printf("Config reload: HTTP credentials %s", map[bool]string{true: "enabled", false: "disabled"}[newCfg.jwtEnabled()])
+	} else if newCfg.jwtEnabled() && newCfg.JWT.keys.issuer.KeyID() != old.JWT.keys.issuer.KeyID() {
+		log.Printf("Config reload: token signing key is now %s", newCfg.JWT.keys.issuer.KeyID())
+	}
+
 	configPtr.Store(newCfg)
 	log.Printf("Config reloaded from %s (%d users, %d roles, %d services)", path, len(newCfg.Users), len(newCfg.Roles), len(newCfg.Services))
 }
@@ -293,6 +331,7 @@ func tlsString(t *TLSConfig) string {
 
 func main() {
 	configFile := "config.yaml"
+	printJWKS := false
 
 	// Parse command-line arguments
 	for i := 1; i < len(os.Args); i++ {
@@ -301,6 +340,11 @@ func main() {
 		case "init":
 			cmdInit(os.Args[i+1:])
 			return
+		case "jwt-init":
+			cmdJWTInit(os.Args[i+1:])
+			return
+		case "jwks":
+			printJWKS = true
 		case "--version", "-v":
 			fmt.Printf("voussh %s\n", version.String())
 			os.Exit(0)
@@ -314,6 +358,8 @@ func main() {
 		case "--help", "-h":
 			fmt.Println("Usage: voussh [options]")
 			fmt.Println("       voussh init [keyfile]")
+			fmt.Println("       voussh jwt-init [keyfile]")
+			fmt.Println("       voussh jwks [--config <file>]")
 			fmt.Println()
 			fmt.Println("Options:")
 			fmt.Println("  --config, -c <file>  Path to config file (default: config.yaml)")
@@ -322,8 +368,15 @@ func main() {
 			fmt.Println()
 			fmt.Println("Commands:")
 			fmt.Println("  init [keyfile]       Generate a new CA key pair")
+			fmt.Println("  jwt-init [keyfile]   Generate a new token signing key pair (default: jwt_ed25519)")
+			fmt.Println("  jwks                 Print the public token verification keys (JWKS) and exit")
 			os.Exit(0)
 		}
+	}
+
+	if printJWKS {
+		cmdJWKS(configFile)
+		return
 	}
 
 	cfg, err := loadConfig(configFile)
@@ -391,6 +444,9 @@ func main() {
 	http.HandleFunc("/device/token", handleDeviceToken)
 	http.HandleFunc("/admin", handleAdmin)
 	http.HandleFunc("/admin/logs", handleAdminLogs)
+	http.HandleFunc("/.well-known/jwks.json", handleJWKS)
+	http.HandleFunc("/token", handleToken)
+	http.HandleFunc("/login/approve", handleLoginApprove)
 
 	log.Printf("voussh %s", version.String())
 
@@ -404,6 +460,12 @@ func main() {
 		}
 	} else {
 		log.Printf("Device flow disabled")
+	}
+
+	if cfg.jwtEnabled() {
+		log.Printf("HTTP credentials enabled: issuer=%s, signing key=%s, %d published key(s), audiences=[%s]",
+			cfg.JWT.Issuer, cfg.JWT.keys.issuer.KeyID(), len(cfg.JWT.keys.issuer.Keys()),
+			strings.Join(cfg.JWT.sortedAudiences(), ", "))
 	}
 
 	if cfg.Admin.enabled() {
@@ -436,53 +498,60 @@ func cmdInit(args []string) {
 	if len(args) > 0 {
 		keyPath = args[0]
 	}
-	pubKeyPath := keyPath + ".pub"
-
-	if _, err := os.Stat(keyPath); err == nil {
-		fmt.Printf("Error: %s already exists\n", keyPath)
-		os.Exit(1)
-	}
-	if _, err := os.Stat(pubKeyPath); err == nil {
-		fmt.Printf("Error: %s already exists\n", pubKeyPath)
-		os.Exit(1)
-	}
-
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		fmt.Printf("Error generating key pair: %v\n", err)
-		os.Exit(1)
-	}
-
-	sshPubKey, err := ssh.NewPublicKey(pubKey)
-	if err != nil {
-		fmt.Printf("Error creating SSH public key: %v\n", err)
-		os.Exit(1)
-	}
-
-	pemBlock, err := ssh.MarshalPrivateKey(privKey, "")
-	if err != nil {
-		fmt.Printf("Error marshaling private key: %v\n", err)
-		os.Exit(1)
-	}
-	privKeyBytes := pem.EncodeToMemory(pemBlock)
-
-	if err := os.WriteFile(keyPath, privKeyBytes, 0600); err != nil {
-		fmt.Printf("Error writing private key: %v\n", err)
-		os.Exit(1)
-	}
-
-	pubKeyBytes := ssh.MarshalAuthorizedKey(sshPubKey)
-	if err := os.WriteFile(pubKeyPath, pubKeyBytes, 0644); err != nil {
-		fmt.Printf("Error writing public key: %v\n", err)
+	if _, err := generateKeyPair(keyPath); err != nil {
+		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Printf("CA key pair generated:\n")
 	fmt.Printf("  Private key: %s\n", keyPath)
-	fmt.Printf("  Public key:  %s\n", pubKeyPath)
+	fmt.Printf("  Public key:  %s\n", keyPath+".pub")
+}
+
+// generateKeyPair writes a new Ed25519 key pair in OpenSSH format: the private
+// key at keyPath (mode 0600) and the public key at keyPath+".pub". It refuses
+// to overwrite either file.
+func generateKeyPair(keyPath string) (ed25519.PublicKey, error) {
+	pubKeyPath := keyPath + ".pub"
+	for _, path := range []string{keyPath, pubKeyPath} {
+		if _, err := os.Stat(path); err == nil {
+			return nil, fmt.Errorf("%s already exists", path)
+		}
+	}
+
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating key pair: %w", err)
+	}
+	sshPubKey, err := ssh.NewPublicKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("creating SSH public key: %w", err)
+	}
+	pemBlock, err := ssh.MarshalPrivateKey(privKey, "")
+	if err != nil {
+		return nil, fmt.Errorf("marshaling private key: %w", err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(pemBlock), 0600); err != nil {
+		return nil, fmt.Errorf("writing private key: %w", err)
+	}
+	if err := os.WriteFile(pubKeyPath, ssh.MarshalAuthorizedKey(sshPubKey), 0644); err != nil {
+		return nil, fmt.Errorf("writing public key: %w", err)
+	}
+	return pubKey, nil
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
+	// A login naming an audience (or carrying a JWK) asks for an HTTP
+	// credential; everything else is the SSH certificate flow, unchanged.
+	if q := r.URL.Query(); q.Get("audience") != "" || q.Get("jwk") != "" {
+		handleJWTLogin(w, r)
+		return
+	}
+	if port := r.URL.Query().Get("cli_port"); port != "" && !validCLIPort(port) {
+		http.Error(w, "Invalid cli_port", http.StatusBadRequest)
+		return
+	}
+
 	state, err := encodeState(StateData{
 		Port:   r.URL.Query().Get("cli_port"),
 		Role:   r.URL.Query().Get("role"),
@@ -501,7 +570,23 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 // and a requested role onto the principals the certificate may carry. An empty
 // role selects "default". The returned role is the one actually used.
 func resolvePrincipals(email, role string) (string, []string, error) {
-	userRoles, ok := currentConfig().Users[email]
+	role, principals, err := resolveRole(currentConfig(), email, role)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(principals) == 0 {
+		return "", nil, fmt.Errorf("no principals configured for role %q", role)
+	}
+	return role, principals, nil
+}
+
+// resolveRole answers the question every credential format shares: does this
+// verified identity hold this role? It returns the role actually selected
+// (an empty request means "default") and whatever principals the users map
+// attaches to it. What a role is worth is format-specific and decided by the
+// caller — SSH requires principals, HTTP credentials ignore them.
+func resolveRole(cfg *Config, email, role string) (string, []string, error) {
+	userRoles, ok := cfg.Users[email]
 	if !ok {
 		return "", nil, fmt.Errorf("user %s is not authorized", email)
 	}
@@ -519,9 +604,6 @@ func resolvePrincipals(email, role string) (string, []string, error) {
 		sort.Strings(available)
 		return "", nil, fmt.Errorf("role %q not available. Available roles: %s",
 			role, strings.Join(available, ", "))
-	}
-	if len(principals) == 0 {
-		return "", nil, fmt.Errorf("no principals configured for role %q", role)
 	}
 
 	return role, principals, nil
@@ -543,6 +625,14 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	cliPort := stateData.Port
 	role := stateData.Role
 	pubkeyB64 := stateData.Pubkey
+
+	// The port ends up inside a redirect URL that carries the credential, so
+	// it must be a port and nothing else. /login checks this too, but the
+	// state parameter is not authenticated and can be forged without it.
+	if cliPort != "" && !validCLIPort(cliPort) {
+		http.Error(w, "Invalid state", http.StatusBadRequest)
+		return
+	}
 
 	ctx := r.Context()
 	token, err := oauth2Config.Exchange(ctx, code)
@@ -587,6 +677,13 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		handleDeviceCallback(w, stateData.Device, claims.Email)
+		return
+	}
+
+	// A login that asked for an HTTP credential continues on its own path:
+	// same verified identity, different authorization and a confirmation step.
+	if stateData.Audience != "" || stateData.JWK != "" {
+		handleJWTCallback(w, r, stateData, claims.Email)
 		return
 	}
 

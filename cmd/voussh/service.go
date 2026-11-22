@@ -27,7 +27,7 @@ const maxSignBodySize = 8 << 10
 type ServiceConfig struct {
 	TokenFile     string   `yaml:"token_file,omitempty"`     // token read (and trimmed) from this file at request time
 	TokenSHA256   string   `yaml:"token_sha256,omitempty"`   // hex SHA-256 digest of the token
-	Principals    []string `yaml:"principals"`               // principals the certificate carries
+	Principals    []string `yaml:"principals"`               // principals the certificate carries; may be empty only for a service granted a jwt audience
 	Validity      string   `yaml:"validity,omitempty"`       // falls back to cert_validity
 	Extensions    []string `yaml:"extensions,omitempty"`     // defaults to EMPTY, unlike interactive certs
 	SourceAddress string   `yaml:"source_address,omitempty"` // source-address critical option: CIDRs the cert may be used from
@@ -45,9 +45,6 @@ func (s ServiceConfig) validate() error {
 		if err != nil || len(digest) != sha256.Size {
 			return errors.New("token_sha256 must be 64 hex characters")
 		}
-	}
-	if len(s.Principals) == 0 {
-		return errors.New("principals must not be empty")
 	}
 	if s.Validity != "" {
 		if _, err := time.ParseDuration(s.Validity); err != nil {
@@ -173,6 +170,14 @@ func handleSign(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		log.Printf("Sign: rejected unknown token from %s", clientIP(r))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// A service defined only to request HTTP credentials has no principals,
+	// and holding its token grants no SSH access at all.
+	if len(svc.Principals) == 0 {
+		log.Printf("Sign: service %q is not authorized for SSH certificates (request from %s)", name, clientIP(r))
+		http.Error(w, "Service is not authorized for SSH certificates", http.StatusForbidden)
 		return
 	}
 

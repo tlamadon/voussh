@@ -1,0 +1,364 @@
+{
+  "description": "Verification test vectors for voussh HTTP credentials (EdDSA access token + RFC 9449 DPoP proof). Configure a verifier from \"verifier\", set its clock to each case's \"now\", present the request, and compare the outcome with \"expect\". All keys are throwaway test keys.",
+  "verifier": {
+    "issuer": "https://auth.example.com",
+    "audience": "secret-broker",
+    "leeway_seconds": 30,
+    "proof_max_age_seconds": 60,
+    "jwks": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "7n7fpGdVP5XCkQTMMXGrnD6IcuGs2dwkyIGd1d8VF3w",
+          "kid": "bRqsG43ZHkEYuHn0iTswlvwHGuRSKH2yzktN8saTFsc",
+          "alg": "EdDSA",
+          "use": "sig"
+        },
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "7QwN9159HXuZbguhfE1pmeW6U9trwfS-v9-avRfw_cc",
+          "kid": "m8r-aW8P94_u3voPmPpil52TfWNeZ1BCFW4wQXjJ5nQ",
+          "alg": "EdDSA",
+          "use": "sig"
+        }
+      ]
+    }
+  },
+  "samples": {
+    "client_public_jwk": {
+      "crv": "Ed25519",
+      "kty": "OKP",
+      "x": "Z6PFhe-Jz2bZDr71mAtkdx0FiwxbKMBjyxJiT6_gpA8"
+    },
+    "client_jwk_thumbprint": "ggnw6G5DgAodPO-A8-gXCtFmFImXop9r5MIZ2AIXInE",
+    "access_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+    "access_token_header": {
+      "alg": "EdDSA",
+      "kid": "bRqsG43ZHkEYuHn0iTswlvwHGuRSKH2yzktN8saTFsc",
+      "typ": "at+jwt"
+    },
+    "access_token_claims": {
+      "iss": "https://auth.example.com",
+      "sub": "alice@example.com",
+      "sub_type": "user",
+      "aud": "secret-broker",
+      "iat": 1790000000,
+      "nbf": 1790000000,
+      "exp": 1790000900,
+      "jti": "token-valid",
+      "role": "default",
+      "cnf": {
+        "jkt": "ggnw6G5DgAodPO-A8-gXCtFmFImXop9r5MIZ2AIXInE"
+      }
+    },
+    "access_token_hash": "rndWogJ_g61Si44bJ1dpdLJ-1FwavUZcsvyYCz4053M",
+    "dpop_proof": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi12YWxpZCIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImF0aCI6InJuZFdvZ0pfZzYxU2k0NGJKMWRwZExKLTFGd2F2VVpjc3Z5WUN6NDA1M00ifQ.OmKOnyKuMgjpyrIRidY05fCHxBFX4zafe6zy2AYglUHMwYfEZWfTlPvCzaLVCrNeUDFYr0EVOTVLILTvxSa1Aw",
+    "dpop_proof_header": {
+      "alg": "EdDSA",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "Z6PFhe-Jz2bZDr71mAtkdx0FiwxbKMBjyxJiT6_gpA8"
+      },
+      "typ": "dpop+jwt"
+    },
+    "dpop_proof_claims": {
+      "jti": "proof-valid",
+      "htm": "GET",
+      "htu": "https://broker.example.com/v1/secrets/db-password",
+      "iat": 1790000000,
+      "ath": "rndWogJ_g61Si44bJ1dpdLJ-1FwavUZcsvyYCz4053M"
+    }
+  },
+  "cases": [
+    {
+      "name": "valid",
+      "description": "A token from the active signing key with a matching proof.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi12YWxpZCIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImF0aCI6InJuZFdvZ0pfZzYxU2k0NGJKMWRwZExKLTFGd2F2VVpjc3Z5WUN6NDA1M00ifQ.OmKOnyKuMgjpyrIRidY05fCHxBFX4zafe6zy2AYglUHMwYfEZWfTlPvCzaLVCrNeUDFYr0EVOTVLILTvxSa1Aw"
+      ],
+      "expect": "ok",
+      "subject": "alice@example.com",
+      "subject_type": "user",
+      "role": "default"
+    },
+    {
+      "name": "valid-previous-signing-key",
+      "description": "A token signed by the other pinned key, as happens mid-rotation.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6Im04ci1hVzhQOTRfdTN2b1BtUHBpbDUyVGZXTmVaMUJDRlc0d1FYako1blEiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi1wcmV2aW91cy1rZXkiLCJyb2xlIjoiZGVmYXVsdCIsImNuZiI6eyJqa3QiOiJnZ253Nkc1RGdBb2RQTy1BOC1nWEN0Rm1GSW1Yb3A5cjVNSVoyQUlYSW5FIn19.lUnBc7PSZ3xv4F-tWRm_fyhDsHELRiSx4caKhclRcNR06LdWqJ32g1xxd23-M_vHTwethYMu65TwwQCNh_u7Aw",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1wcmV2aW91cy1rZXkiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJMcmJ3QkkxTTlVVmROcFNSTlAxZ1hFc2Fhc1MtVjBxZk51Zldpc0FFNS1BIn0.ww0IeCix_8NiDmkIat2pr_d4V5j_cMYlOJGS0PVVqC6HSMcET4mXgUolir-LwUpy5eXHUgX5floH0P9SUpSICg"
+      ],
+      "expect": "ok",
+      "subject": "alice@example.com",
+      "subject_type": "user",
+      "role": "default"
+    },
+    {
+      "name": "valid-query-ignored",
+      "description": "The request URL has a query string; htu is compared without it.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password?version=3",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1xdWVyeSIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImF0aCI6InJuZFdvZ0pfZzYxU2k0NGJKMWRwZExKLTFGd2F2VVpjc3Z5WUN6NDA1M00ifQ.KnBr4ksnfDuhAr0GOu-xpCVo7jSAnhTvEEsrM5KtzocIMn35naSqFuK_1wd96v-iDVUs7h50vSr-47tK716WAA"
+      ],
+      "expect": "ok",
+      "subject": "alice@example.com",
+      "subject_type": "user",
+      "role": "default"
+    },
+    {
+      "name": "valid-service-identity",
+      "description": "A machine identity: sub_type is \"service\".",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJzZXJ2aWNlOmNpLXJ1bm5lciIsInN1Yl90eXBlIjoic2VydmljZSIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi1zZXJ2aWNlIiwicm9sZSI6ImRlcGxveSIsImNuZiI6eyJqa3QiOiJnZ253Nkc1RGdBb2RQTy1BOC1nWEN0Rm1GSW1Yb3A5cjVNSVoyQUlYSW5FIn19.3IkHbHCPU7ALYueM73wlMasZF4tA5F8-IuGwL5tEwcm3zebiCj73T09YBk6a1yqCK9-EQ2FcC61mtRTdzLbqAA",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1zZXJ2aWNlIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9icm9rZXIuZXhhbXBsZS5jb20vdjEvc2VjcmV0cy9kYi1wYXNzd29yZCIsImlhdCI6MTc5MDAwMDAwMCwiYXRoIjoiMUNHcGJTaWFaQ1hhOHloZFE3WVlOZl9NY21fZ2Y3ckhMLTBuZW5sckFTYyJ9.yrDSSVpRe41sAmbMr1Oy_YzQU2wpwLIr5O16AzJzGoGRoUKpxqPNEfcAUxnxFC7qRGzHThktXxlHzVj01XasBw"
+      ],
+      "expect": "ok",
+      "subject": "service:ci-runner",
+      "subject_type": "service",
+      "role": "deploy"
+    },
+    {
+      "name": "token-payload-tampered",
+      "description": "The role claim was changed after signing.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJhdWQiOiJzZWNyZXQtYnJva2VyIiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifSwiZXhwIjoxNzkwMDAwOTAwLCJpYXQiOjE3OTAwMDAwMDAsImlzcyI6Imh0dHBzOi8vYXV0aC5leGFtcGxlLmNvbSIsImp0aSI6InRva2VuLXZhbGlkIiwibmJmIjoxNzkwMDAwMDAwLCJyb2xlIjoiYWRtaW4iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciJ9.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi10YW1wZXJlZCIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImF0aCI6ImV2VmFWQzRvU3ZROU4tTXhuTWUycmVsQ1NXYUZzMnpxRUtXcWJDWDZDdk0ifQ.FlpDOZo8DkPaTzuv6qq-vzGyoJcGHLVPfmEeYj8BGIPek7oRloaZYXRp9CDXFLMtciX7dStkF6ExL7ahnVBWDA"
+      ],
+      "expect": "invalid_token_signature"
+    },
+    {
+      "name": "token-unknown-key",
+      "description": "Correct claims, signed by a key that is not pinned.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6InY4NWloLUZGalVMTjlybm4zcnZZcUtIaWp4Vi1aVzdBTmpZREwxQjRTRlEiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi11bmtub3duLWtleSIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.maBu2uZxyrIrftPt1MYXF7j4EnOpXUEtjwIF3eUWEFg2288CVCcVqqwI_eDEj9z-hUGkCYnQWbi3UJmzDB-7Cw",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi11bmtub3duLWtleSIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImF0aCI6InpQLW5lZjBVaDF1ZG03djVRWXNfcU0zNTk0VEdiZG5zbkFqTzVTYUpfZzQifQ.HC_092nZ_TPMSnwGpBWYatXqjFLKmECMVaAlxr38306oOrwB-HL6U23alHiNb4db1edvbcVp6-9wjTdMjUquCw"
+      ],
+      "expect": "unknown_key"
+    },
+    {
+      "name": "token-forged-under-pinned-kid",
+      "description": "Names a pinned kid but is signed by another key.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.7qP9zkdszlCPd8ydsElI1SW9F6scOtBjBcRdmBfxI8c0aia0BXHDIp8PWdPA6YS9wdIzE88StVjWfUGYu-gIDQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1mb3JnZWQiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiItb1poS1FDWEhMR0JKS2Q5MGdhQ1pxcDd6aS1sNlhTSWEzNlQtZ3A4SGxzIn0.cpWoe6C181cbhrtzFX44Cr3J0UAW6OpZP0rjtEV8lQh9vk3yKIFexq9kLD50ZovAPxxpto4Losx4n2UiBaQuBQ"
+      ],
+      "expect": "invalid_token_signature"
+    },
+    {
+      "name": "token-alg-none",
+      "description": "alg is \"none\" with an empty signature.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJub25lIiwia2lkIjoiYlJxc0c0M1pIa0VZdUhuMGlUc3dsdndIR3VSU0tIMnl6a3ROOHNhVEZzYyIsInR5cCI6ImF0K2p3dCJ9.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1hbGctbm9uZSIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImF0aCI6ImdrZHJXWHY4NzgtOVljU0ZrdjZxUG01VlZiM2FUekFZX05sbGxvZkRfcGMifQ._PlhhwvHnWCvM-I2YODd2i4SurrjoNGQ9L-gczjqCOz2WOevqQI4CCAKrIXFKhDvTCSv4IfvOfePoMVlnpcCAQ"
+      ],
+      "expect": "malformed_token"
+    },
+    {
+      "name": "token-alg-hs256-public-key",
+      "description": "alg is HS256, keyed with the issuer's public key (algorithm confusion).",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJIUzI1NiIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.tv6pwbUz-GubHWPmxTOmBKhJ5gu-kfWgpIVsvvnsjMQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1hbGctaHMyNTYiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJPQ3E5eFpaRmt2aGRxcWgyOEJjbkt1dDNvYVhsbDBWcUJyTV9iZlBuRTN3In0.bE20dPRDpFb64Lucb3Nolib9HSo1F83HOqI4W8pL8Hy9aNJcQ3kw0usaqUbFOSy4wt-Q9lihCfWa0HIJTxzRBg"
+      ],
+      "expect": "malformed_token"
+    },
+    {
+      "name": "wrong-issuer",
+      "description": "Validly signed, but iss is not the expected issuer.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGgub3RoZXIuZXhhbXBsZSIsInN1YiI6ImFsaWNlQGV4YW1wbGUuY29tIiwic3ViX3R5cGUiOiJ1c2VyIiwiYXVkIjoic2VjcmV0LWJyb2tlciIsImlhdCI6MTc5MDAwMDAwMCwibmJmIjoxNzkwMDAwMDAwLCJleHAiOjE3OTAwMDA5MDAsImp0aSI6InRva2VuLXdyb25nLWlzc3VlciIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0._nBgHZ4yd7NQCYbkQMMnqsSTig4pfqoqrU-i1EM5lCXorKfzKIxXq19r2jreu3s9EvtwHim41CAG7CkaO_B5Dw",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi13cm9uZy1pc3N1ZXIiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJ0Y1BzS1VndXoyRUhRSC1FNno5RnZ4aFFaZldxa0ZSc2ctdVZlaXZINXhZIn0.0M2o86MqIQid15KJVie0QBvDyn6gJkZ-EZ4HARh2GZJVYpfG9b9AHzuuh2HRumymON6LRoHsP2hDi0RK63-5BA"
+      ],
+      "expect": "wrong_issuer"
+    },
+    {
+      "name": "wrong-audience",
+      "description": "Validly signed for a different service.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6ImJpbGxpbmctYXBpIiwiaWF0IjoxNzkwMDAwMDAwLCJuYmYiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDAwMDkwMCwianRpIjoidG9rZW4td3JvbmctYXVkaWVuY2UiLCJyb2xlIjoiZGVmYXVsdCIsImNuZiI6eyJqa3QiOiJnZ253Nkc1RGdBb2RQTy1BOC1nWEN0Rm1GSW1Yb3A5cjVNSVoyQUlYSW5FIn19.DxT1rt9pouAhGSqvk_3lOfNWfWH610YP5cxXOKh5KpTnWlKTpmOa3U0WQH-48VlcMCxrWxrKoJVSJm7oav0mCg",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi13cm9uZy1hdWRpZW5jZSIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImF0aCI6Im5KZkdYcmZfaWhIc1FOR18yRzBxN01XUmxIeENCSHVWY1haMG1RWm0zSTgifQ.bWlHOysq-U9fS_sLkiOFI86dsapcx55oNpNiVI8Nu5uIAQR-BQeO7mqGlSc2LcpNg8QNl73WURHTvM_xrgqxBA"
+      ],
+      "expect": "wrong_audience"
+    },
+    {
+      "name": "token-expired",
+      "description": "exp is 45 minutes in the past.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3ODk5OTY0MDAsIm5iZiI6MTc4OTk5NjQwMCwiZXhwIjoxNzg5OTk3MzAwLCJqdGkiOiJ0b2tlbi1leHBpcmVkIiwicm9sZSI6ImRlZmF1bHQiLCJjbmYiOnsiamt0IjoiZ2dudzZHNURnQW9kUE8tQTgtZ1hDdEZtRkltWG9wOXI1TUlaMkFJWEluRSJ9fQ.WC0G9kGPRaSYLjr4Oags400mRvzb8nZ7QIDUzxbbeLevHzy8D2oJoiNVuxKmJN3yn_FrDNTkOBMWx0HXqbQJCw",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1leHBpcmVkIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9icm9rZXIuZXhhbXBsZS5jb20vdjEvc2VjcmV0cy9kYi1wYXNzd29yZCIsImlhdCI6MTc5MDAwMDAwMCwiYXRoIjoia05lcmNUdU9wbzFQVGUzcklPRXZPaFo5T2prWlp6QmdTYm96MEJjdGxTMCJ9.XDohsL24hetzFKlPxCD3uU3IZiwaL-WUmJUW2_f1A8WufOtthejdtjsTcCvE6bt_X0hj3lU5YN7TuSA2W8A1AA"
+      ],
+      "expect": "token_expired"
+    },
+    {
+      "name": "token-not-yet-valid",
+      "description": "nbf is 10 minutes in the future.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDA2MDAsIm5iZiI6MTc5MDAwMDYwMCwiZXhwIjoxNzkwMDAxNTAwLCJqdGkiOiJ0b2tlbi1ub3QteWV0LXZhbGlkIiwicm9sZSI6ImRlZmF1bHQiLCJjbmYiOnsiamt0IjoiZ2dudzZHNURnQW9kUE8tQTgtZ1hDdEZtRkltWG9wOXI1TUlaMkFJWEluRSJ9fQ.6sJFFNMCmLwX2_04aWvilZ7td9mB40i6u_fQD0iOoWeUgHiuAVikkiapEdaCjygjqy2YrkUt-XvnXHjaxfAXAA",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1ub3QteWV0LXZhbGlkIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9icm9rZXIuZXhhbXBsZS5jb20vdjEvc2VjcmV0cy9kYi1wYXNzd29yZCIsImlhdCI6MTc5MDAwMDAwMCwiYXRoIjoiM3NLQ1ZyMHVUYlpudlBVQjZVRHZ1VjRWYWF2MVJ1c3h6d1A4TVdxMjF0OCJ9.zyyoeUyxf9vXPZsOq7sX9slXpaauY-V6imXqXIxiTziSOqQpM9JwgT0q57il3EdNZh3WJZhin0XXqPfqKPY4Bw"
+      ],
+      "expect": "token_not_yet_valid"
+    },
+    {
+      "name": "bearer-scheme",
+      "description": "A bound token presented as a bearer token.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "Bearer eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1iZWFyZXIiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIn0.Vvw3L7WniSCpJmxYj7d0uG03W1H5AGdhqn9ZZFC5ZXieu4rvAYT6Lle9rphvINko7bArhtiphxTcFwD0y_87Ag"
+      ],
+      "expect": "missing_token"
+    },
+    {
+      "name": "missing-proof",
+      "description": "No DPoP header at all.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [],
+      "expect": "missing_proof"
+    },
+    {
+      "name": "proof-key-mismatch",
+      "description": "A stolen token with a well-formed proof from another key: cnf.jkt does not match.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IllvblVOeFk0alpRX1NRVXcxTHZ6c1NxSFVmTzdUNHJnWjFPa0VUeG9uN2MifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1rZXktbWlzbWF0Y2giLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIn0.21KRO5DYeDXhKS8VdtBRpdZFPMfhm73QE2sVRxeUMvOGDhqLqHnhRsDI31qSjCr1XsFMZlnkiRJ2kwL3xQHPBA"
+      ],
+      "expect": "key_mismatch"
+    },
+    {
+      "name": "proof-bad-signature",
+      "description": "The proof names the right key in its header but is signed by another.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIiwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9icm9rZXIuZXhhbXBsZS5jb20vdjEvc2VjcmV0cy9kYi1wYXNzd29yZCIsImlhdCI6MTc5MDAwMDAwMCwianRpIjoicHJvb2YtYmFkLXNpZ25hdHVyZSJ9.2Wk4k_k2UJrOxM_xWB-3IUpj5St16VGCZxsg1WWtZauhWCVcdiTfvbtuMZIjv_WNfYN0I22heI6LHt3Kw6AgAw"
+      ],
+      "expect": "invalid_proof_signature"
+    },
+    {
+      "name": "method-mismatch",
+      "description": "A proof made for GET, replayed on a DELETE.",
+      "now": 1790000000,
+      "method": "DELETE",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1tZXRob2QiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIn0.fIQ5gNFq2M9aWMVhxGR-sOVxQh_EWyOhZE_M9OFS1Pk9GZPlkVS52WGibcL_T3XozWUAe-MErDaOIQhsR5z7DQ"
+      ],
+      "expect": "method_mismatch"
+    },
+    {
+      "name": "uri-mismatch",
+      "description": "A proof made for one path, replayed against another.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/root-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi11cmkiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIn0.CyeRhyAnYmjGwI5yeKRzNVVegeNf8OyqINfVhunoAO4q1KqXv6BxiB5XZAWw1SqYtLzL2eM3Vmf6d5xgNu4RAw"
+      ],
+      "expect": "uri_mismatch"
+    },
+    {
+      "name": "token-hash-mismatch",
+      "description": "A proof made for one token, presented with another issued to the same key.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi1vdGhlciIsInJvbGUiOiJhZG1pbiIsImNuZiI6eyJqa3QiOiJnZ253Nkc1RGdBb2RQTy1BOC1nWEN0Rm1GSW1Yb3A5cjVNSVoyQUlYSW5FIn19.53ijFqV2lWMtFIlwZNymgCZOyWpMPFxIANV2WAFPxahSMLXQOxQQE_Asz9Y18LUXPNP-l01zFEeeuPe1XGwJAA",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1hdGgiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIn0.rTe2kmk1SWgYXBdgmwo7YZSCXfLbIl0_U6EfapnEZaoZz-C3NBlKAval1AVA_rpAce-wUDfD6HAbuDCcrXQTCA"
+      ],
+      "expect": "token_hash_mismatch"
+    },
+    {
+      "name": "proof-stale",
+      "description": "The proof is two minutes old.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1zdGFsZSIsImh0bSI6IkdFVCIsImh0dSI6Imh0dHBzOi8vYnJva2VyLmV4YW1wbGUuY29tL3YxL3NlY3JldHMvZGItcGFzc3dvcmQiLCJpYXQiOjE3ODk5OTk4ODAsImF0aCI6InJuZFdvZ0pfZzYxU2k0NGJKMWRwZExKLTFGd2F2VVpjc3Z5WUN6NDA1M00ifQ.ZbXnXxh2G6mqTM3_dahlg2QQ9vB8kipqHcRECiyL_sXv_GwNZIlbetZCXPREvWvVTy10RehL9BIW5CH1JH32Bg"
+      ],
+      "expect": "stale_proof"
+    },
+    {
+      "name": "proof-from-the-future",
+      "description": "The proof is dated two minutes ahead.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1mdXR1cmUiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMTIwLCJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIn0.HsOELCalepWadqpR75G8Y5Jh5MtS47i0xeXMdQ2YCmhTdsU2MTcQImXvL4iiwaDq8mxvNvBSs4paYJbRMI4GDQ"
+      ],
+      "expect": "stale_proof"
+    },
+    {
+      "name": "proof-replayed",
+      "description": "The identical request presented twice: the second is refused.",
+      "now": 1790000000,
+      "method": "GET",
+      "url": "https://broker.example.com/v1/secrets/db-password",
+      "authorization": "DPoP eyJhbGciOiJFZERTQSIsImtpZCI6ImJScXNHNDNaSGtFWXVIbjBpVHN3bHZ3SEd1UlNLSDJ5emt0TjhzYVRGc2MiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2F1dGguZXhhbXBsZS5jb20iLCJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSIsInN1Yl90eXBlIjoidXNlciIsImF1ZCI6InNlY3JldC1icm9rZXIiLCJpYXQiOjE3OTAwMDAwMDAsIm5iZiI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwOTAwLCJqdGkiOiJ0b2tlbi12YWxpZCIsInJvbGUiOiJkZWZhdWx0IiwiY25mIjp7ImprdCI6Imdnbnc2RzVEZ0FvZFBPLUE4LWdYQ3RGbUZJbVhvcDlyNU1JWjJBSVhJbkUifX0.-RA3rGKVILEIr9JOR9sYN9RbmXR9NXhvN8LANApcbp7ChfosZG2MbacQ7CzIegQ827jo3sPfR8HK2Y411LU5DQ",
+      "dpop": [
+        "eyJhbGciOiJFZERTQSIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6Ilo2UEZoZS1KejJiWkRyNzFtQXRrZHgwRml3eGJLTUJqeXhKaVQ2X2dwQTgifSwidHlwIjoiZHBvcCtqd3QifQ.eyJqdGkiOiJwcm9vZi1yZXBsYXkiLCJodG0iOiJHRVQiLCJodHUiOiJodHRwczovL2Jyb2tlci5leGFtcGxlLmNvbS92MS9zZWNyZXRzL2RiLXBhc3N3b3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJhdGgiOiJybmRXb2dKX2c2MVNpNDRiSjFkcGRMSi0xRndhdlVaY3N2eVlDejQwNTNNIn0.HIt_C-1xbK2gt98pvP38LyuPpEgKGdAMJR3XPPynYfZmiHgtjM30L_EWQ6CWW5KAGEZ2JXnshz8LshFfh2p_CA"
+      ],
+      "times": 2,
+      "expect": "proof_replayed"
+    }
+  ]
+}

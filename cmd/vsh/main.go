@@ -84,6 +84,10 @@ func main() {
 		cmdSSH(args)
 	case "pubkey":
 		cmdPubkey()
+	case "token":
+		cmdToken(args)
+	case "http":
+		cmdHTTP(args)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		printUsage()
@@ -102,6 +106,8 @@ func printUsage() {
 	fmt.Println("  status  Show current login status")
 	fmt.Println("  ssh     SSH to a host using certificate (use -a for all identities)")
 	fmt.Println("  pubkey  Get CA public key from server")
+	fmt.Println("  token   Obtain and manage HTTP credentials (login, renew, status, print, proof, logout)")
+	fmt.Println("  http    Make an HTTP request authenticated with a stored HTTP credential")
 	fmt.Println("  version Show vsh version")
 }
 

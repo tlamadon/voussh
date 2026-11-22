@@ -57,15 +57,7 @@ func cmdLoginDevice(pubKeyData []byte, role string, local bool) {
 		interval = 5 * time.Second
 	}
 
-	fmt.Println()
-	fmt.Println("To authorize this machine, open this page on any device:")
-	fmt.Printf("\n    %s\n", code.VerificationURI)
-	fmt.Println("\nand enter the code:")
-	fmt.Printf("\n    %s\n", code.UserCode)
-	if code.VerificationURIComplete != "" {
-		fmt.Printf("\nOr open this link directly:\n\n    %s\n", code.VerificationURIComplete)
-	}
-	fmt.Printf("\nWaiting for approval (expires in %s)...\n", expiresIn.Round(time.Second))
+	printDeviceInstructions(os.Stdout, code, expiresIn)
 
 	token, err := pollDeviceToken(code.DeviceCode, interval, expiresIn)
 	if err != nil {
@@ -90,14 +82,34 @@ func cmdLoginDevice(pubKeyData []byte, role string, local bool) {
 	}
 }
 
-// requestDeviceCode asks the server to mint a device code and user code.
+// printDeviceInstructions tells the user where to approve the request. The
+// writer is a parameter because the token commands keep stdout for data.
+func printDeviceInstructions(w io.Writer, code *deviceCodeResponse, expiresIn time.Duration) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "To authorize this machine, open this page on any device:")
+	fmt.Fprintf(w, "\n    %s\n", code.VerificationURI)
+	fmt.Fprintln(w, "\nand enter the code:")
+	fmt.Fprintf(w, "\n    %s\n", code.UserCode)
+	if code.VerificationURIComplete != "" {
+		fmt.Fprintf(w, "\nOr open this link directly:\n\n    %s\n", code.VerificationURIComplete)
+	}
+	fmt.Fprintf(w, "\nWaiting for approval (expires in %s)...\n", expiresIn.Round(time.Second))
+}
+
+// requestDeviceCode asks the server to mint a device code and user code for an
+// SSH certificate.
 func requestDeviceCode(pubKeyData []byte, role string) (*deviceCodeResponse, error) {
 	form := url.Values{}
 	form.Set("pubkey", base64.RawURLEncoding.EncodeToString(pubKeyData))
 	if role != "" {
 		form.Set("role", role)
 	}
+	return requestDeviceCodeForm(form)
+}
 
+// requestDeviceCodeForm starts a device request. The form says what is being
+// asked for; the exchange is the same for every credential kind.
+func requestDeviceCodeForm(form url.Values) (*deviceCodeResponse, error) {
 	resp, err := deviceHTTPClient.PostForm(serverURL+"/device/code", form)
 	if err != nil {
 		return nil, fmt.Errorf("failed to contact %s: %w", serverURL, err)
@@ -110,6 +122,12 @@ func requestDeviceCode(pubKeyData []byte, role string) (*deviceCodeResponse, err
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
+		// A server that has the device flow but lacks what was asked for
+		// (for instance HTTP credentials) says so in a JSON error body.
+		var errResp deviceErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Description != "" {
+			return nil, fmt.Errorf("failed to start device login: %s", errResp.Description)
+		}
 		return nil, fmt.Errorf("this server does not offer the device flow (it may be disabled, or running an older voussh)")
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -126,8 +144,27 @@ func requestDeviceCode(pubKeyData []byte, role string) (*deviceCodeResponse, err
 	return &code, nil
 }
 
-// pollDeviceToken polls until the request is approved, rejected or expires.
+// pollDeviceToken polls until the request is approved, rejected or expires,
+// and returns the issued certificate.
 func pollDeviceToken(deviceCode string, interval, expiresIn time.Duration) (*deviceTokenResponse, error) {
+	body, err := pollDevice(deviceCode, interval, expiresIn)
+	if err != nil {
+		return nil, err
+	}
+	var token deviceTokenResponse
+	if err := json.Unmarshal(body, &token); err != nil {
+		return nil, fmt.Errorf("unexpected response from server: %w", err)
+	}
+	if token.Certificate == "" {
+		return nil, fmt.Errorf("server returned no certificate")
+	}
+	return &token, nil
+}
+
+// pollDevice polls until the request is approved, rejected or expires. On
+// approval it returns the response body, whose shape depends on the kind of
+// credential that was requested.
+func pollDevice(deviceCode string, interval, expiresIn time.Duration) ([]byte, error) {
 	form := url.Values{}
 	form.Set("device_code", deviceCode)
 
@@ -151,14 +188,7 @@ func pollDeviceToken(deviceCode string, interval, expiresIn time.Duration) (*dev
 		}
 
 		if resp.StatusCode == http.StatusOK {
-			var token deviceTokenResponse
-			if err := json.Unmarshal(body, &token); err != nil {
-				return nil, fmt.Errorf("unexpected response from server: %w", err)
-			}
-			if token.Certificate == "" {
-				return nil, fmt.Errorf("server returned no certificate")
-			}
-			return &token, nil
+			return body, nil
 		}
 
 		var errResp deviceErrorResponse

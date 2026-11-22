@@ -57,7 +57,25 @@ redirect_url: "http://localhost:8080/callback"
 #     extensions: []                     # default empty; e.g. [permit-pty]
 #     source_address: 100.88.151.28/32   # optional: CIDRs the cert may be used from
 
+# Optional: HTTP credentials — short-lived, key-bound JWTs that your own HTTP
+# services verify offline against a pinned public key. Off unless this block
+# is present. See docs/http-credentials.md.
+# jwt:
+#   issuer: "https://auth.example.com"       # "iss"; services require this exact string
+#   signing_key: "./jwt_ed25519"             # generate with: voussh jwt-init (NOT the CA key)
+#   # key_id: "2026-11"                      # "kid"; defaults to the key's thumbprint
+#   validity: 15m                            # token lifetime; default 15m, maximum 24h
+#   # verification_keys:                     # extra public keys to publish (key rotation)
+#   #   - key: "./jwt_ed25519_previous.pub"
+#   audiences:                               # the ONLY services tokens can be issued for
+#     secret-broker:
+#       allowed_roles: [default, admin]      # user roles admitted (user must also hold the role)
+#       # services:                          # machine identities, granted explicitly
+#       #   herdr-hq: [deploy]
+#       # validity: 5m                       # per-audience override
+
 # Users: email -> role -> principals
+# (a role may map to [] to make it usable for HTTP credentials only)
 users:
   alice@example.com:
     default: [root, admin]

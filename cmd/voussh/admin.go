@@ -248,7 +248,7 @@ func adminLogLines(after uint64) []adminLogLine {
 // substring matching is good enough.
 func classifyLogLine(text string) string {
 	switch {
-	case strings.Contains(text, "Certificate issued"):
+	case strings.Contains(text, "Certificate issued"), strings.Contains(text, "Token issued"):
 		return "issued"
 	case strings.Contains(text, "rejected"), strings.Contains(text, "failed"),
 		strings.Contains(text, "Failed"), strings.Contains(text, "denied"),

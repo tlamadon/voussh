@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/voussh/voussh/httpcred"
 	"github.com/voussh/voussh/internal/device"
 	"golang.org/x/crypto/ssh"
 )
@@ -79,6 +80,64 @@ func parseUserPublicKey(raw []byte) (ssh.PublicKey, string, error) {
 	return pubKey, comment, nil
 }
 
+// sshDeviceSpec builds the request for an SSH certificate from the submitted
+// form: a base64url-wrapped authorized_keys line and an optional role.
+func sshDeviceSpec(form url.Values) (device.Spec, string, error) {
+	pubKeyB64 := form.Get("pubkey")
+	if pubKeyB64 == "" {
+		return device.Spec{}, "", errors.New("missing pubkey")
+	}
+	pubKeyRaw, err := base64.RawURLEncoding.DecodeString(pubKeyB64)
+	if err != nil {
+		return device.Spec{}, "", errors.New("pubkey is not valid base64url")
+	}
+	pubKey, comment, err := parseUserPublicKey(pubKeyRaw)
+	if err != nil {
+		return device.Spec{}, "", err
+	}
+	return device.Spec{
+		Kind:        device.KindSSH,
+		PubKey:      pubKeyRaw,
+		Fingerprint: ssh.FingerprintSHA256(pubKey),
+		Role:        form.Get("role"),
+	}, comment, nil
+}
+
+// jwtDeviceSpec builds the request for an HTTP credential: an audience, the
+// client's public JWK and an optional role. The audience is checked against
+// the configured list here, before any code is minted, so a typo fails in the
+// terminal rather than after the browser round trip. Whether this user may
+// have it is decided later, once there is a user.
+func jwtDeviceSpec(cfg *Config, form url.Values) (device.Spec, error) {
+	if form.Get("pubkey") != "" {
+		return device.Spec{}, errors.New("request either an SSH certificate (pubkey) or an HTTP credential (audience, jwk), not both")
+	}
+	audience := form.Get("audience")
+	if _, err := cfg.jwtAudience(audience); err != nil {
+		return device.Spec{}, err
+	}
+	key, err := decodeJWKParam(form.Get("jwk"))
+	if err != nil {
+		return device.Spec{}, err
+	}
+	return device.Spec{
+		Kind:     device.KindJWT,
+		Audience: audience,
+		// The canonical form is stored, not the bytes the client sent.
+		PubKey:      httpcred.MarshalPublicJWK(key),
+		Fingerprint: httpcred.Thumbprint(key),
+		Role:        form.Get("role"),
+	}, nil
+}
+
+// deviceSpecStatus picks the status for a rejected /device/code request.
+func deviceSpecStatus(err error) int {
+	if errors.Is(err, errJWTDisabled) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
+}
+
 // ---------------------------------------------------------------------------
 // POST /device/code — the CLI asks for a pair of codes.
 // ---------------------------------------------------------------------------
@@ -112,19 +171,20 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pubKeyB64 := r.PostForm.Get("pubkey")
-	if pubKeyB64 == "" {
-		writeDeviceError(w, http.StatusBadRequest, "invalid_request", "missing pubkey")
-		return
+	// A request naming an audience (or carrying a JWK) is for an HTTP
+	// credential; anything else is the SSH certificate request it always was.
+	var (
+		spec    device.Spec
+		comment string
+		err     error
+	)
+	if r.PostForm.Get("audience") != "" || r.PostForm.Get("jwk") != "" {
+		spec, err = jwtDeviceSpec(currentConfig(), r.PostForm)
+	} else {
+		spec, comment, err = sshDeviceSpec(r.PostForm)
 	}
-	pubKeyRaw, err := base64.RawURLEncoding.DecodeString(pubKeyB64)
 	if err != nil {
-		writeDeviceError(w, http.StatusBadRequest, "invalid_request", "pubkey is not valid base64url")
-		return
-	}
-	pubKey, comment, err := parseUserPublicKey(pubKeyRaw)
-	if err != nil {
-		writeDeviceError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeDeviceError(w, deviceSpecStatus(err), "invalid_request", err.Error())
 		return
 	}
 
@@ -135,7 +195,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := deviceStore.Create(pubKeyRaw, ssh.FingerprintSHA256(pubKey), r.PostForm.Get("role"))
+	req, err := deviceStore.CreateSpec(spec)
 	if err != nil {
 		if errors.Is(err, device.ErrFull) {
 			writeDeviceError(w, http.StatusServiceUnavailable, "slow_down", "too many pending requests")
@@ -146,8 +206,13 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Device flow: request %s created (key=%s comment=%q role=%q)",
-		req.UserCode, req.Fingerprint, comment, req.Role)
+	if req.Kind == device.KindJWT {
+		log.Printf("Device flow: token request %s created (audience=%q key=%s role=%q)",
+			req.UserCode, req.Audience, req.Fingerprint, req.Role)
+	} else {
+		log.Printf("Device flow: request %s created (key=%s comment=%q role=%q)",
+			req.UserCode, req.Fingerprint, comment, req.Role)
+	}
 
 	// Both fields are whole seconds on the wire. Round the interval up and
 	// floor it at one second, so a sub-second configured interval cannot be
@@ -235,7 +300,20 @@ func handleDeviceCallback(w http.ResponseWriter, userCode, email string) {
 		return
 	}
 
-	role, principals, err := resolvePrincipals(email, req.Role)
+	// Identity is established; what it is worth depends on what was asked
+	// for. A certificate needs principals for the role, a token needs the
+	// role to be allowed at the audience — and has no use for principals.
+	var (
+		role       string
+		principals []string
+	)
+	if req.Kind == device.KindJWT {
+		var grant jwtGrant
+		grant, err = authorizeUserJWT(currentConfig(), email, req.Audience, req.Role)
+		role = grant.Role
+	} else {
+		role, principals, err = resolvePrincipals(email, req.Role)
+	}
 	if err != nil {
 		renderDeviceResult(w, http.StatusForbidden, "Not authorized", err.Error(), false)
 		return
@@ -290,7 +368,12 @@ func handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("Device flow: request %s denied by %s", userCode, req.Email)
 		renderDeviceResult(w, http.StatusOK, "Request denied",
-			"No certificate was issued. You can close this window.", false)
+			"No "+credentialNoun(req.Kind)+" was issued. You can close this window.", false)
+		return
+	}
+
+	if req.Kind == device.KindJWT {
+		approveDeviceToken(w, r, req, userCode, token)
 		return
 	}
 
@@ -317,6 +400,48 @@ func handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	logCertificateIssued(cert, req.Email, req.Role, req.Principals, "device")
 	renderDeviceResult(w, http.StatusOK, "Device approved",
 		"The certificate has been sent to your terminal. You can close this window.", true)
+}
+
+// credentialNoun names what a request would issue, for messages.
+func credentialNoun(kind device.Kind) string {
+	if kind == device.KindJWT {
+		return "token"
+	}
+	return "certificate"
+}
+
+// approveDeviceToken is the token half of /device/approve: the approval token
+// has been validated and the user chose Approve.
+func approveDeviceToken(w http.ResponseWriter, r *http.Request, req device.Request, userCode, approvalToken string) {
+	cfg := currentConfig()
+	key, err := httpcred.ParsePublicJWK(req.PubKey)
+	if err != nil {
+		renderDeviceResult(w, http.StatusBadRequest, "Error", "The requested key is not usable.", false)
+		return
+	}
+	// Authorized once when the user signed in, and again now against the
+	// config in force at the moment of signing.
+	grant, err := authorizeUserJWT(cfg, req.Email, req.Audience, req.Role)
+	if err != nil {
+		log.Printf("Token: denied sub=%s audience=%q role=%q via=device: %v", req.Email, req.Audience, req.Role, err)
+		renderDeviceResult(w, http.StatusForbidden, "Not authorized", err.Error(), false)
+		return
+	}
+	signed, claims, err := issueJWT(cfg, grant, key)
+	if err != nil {
+		log.Printf("Device flow: failed to sign token for %s: %v", req.Email, err)
+		renderDeviceResult(w, http.StatusInternalServerError, "Error", "Failed to issue the token.", false)
+		return
+	}
+	if _, err := deviceStore.Approve(userCode, approvalToken, []byte(signed)); err != nil {
+		renderDeviceResult(w, http.StatusConflict, "Request unavailable",
+			"That request is no longer awaiting approval.", false)
+		return
+	}
+
+	logTokenIssued(cfg, claims, "device", clientIP(r))
+	renderDeviceResult(w, http.StatusOK, "Device approved",
+		"The token has been sent to your terminal. You can close this window.", true)
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +483,19 @@ func handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// RFC 8628 §3.5 returns these as ordinary OAuth error responses.
 		writeDeviceError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
+
+	if req.Kind == device.KindJWT {
+		// Only this issuer's own freshly signed token is ever stored here,
+		// so reading the claims back needs no verification.
+		claims, err := httpcred.ParseUnverified(string(req.Cert))
+		if err != nil {
+			log.Printf("Device flow: stored token for %s does not parse: %v", req.Email, err)
+			writeDeviceError(w, http.StatusInternalServerError, "server_error", "")
+			return
+		}
+		writeJSON(w, http.StatusOK, newTokenResponse(string(req.Cert), claims))
 		return
 	}
 
@@ -423,19 +561,26 @@ func init() {
 <h2>Approve this device?</h2>
 <p>Signed in as <strong>{{.Email}}</strong>.</p>
 <table style="border-collapse: collapse; margin: 20px 0; width: 100%;">
+{{if .Audience}}<tr><td style="padding: 6px 12px 6px 0; color: #666;">Audience</td><td><strong>{{.Audience}}</strong></td></tr>
 <tr><td style="padding: 6px 12px 6px 0; color: #666;">Role</td><td><strong>{{.Role}}</strong></td></tr>
+<tr><td style="padding: 6px 12px 6px 0; color: #666;">Valid for</td><td>{{.Validity}}</td></tr>
+<tr><td style="padding: 6px 12px 6px 0; color: #666;">Client key</td>
+    <td style="font-family: monospace; font-size: 13px; word-break: break-all;">{{.Fingerprint}}</td></tr>
+{{else}}<tr><td style="padding: 6px 12px 6px 0; color: #666;">Role</td><td><strong>{{.Role}}</strong></td></tr>
 <tr><td style="padding: 6px 12px 6px 0; color: #666;">Principals</td><td>{{.Principals}}</td></tr>
 <tr><td style="padding: 6px 12px 6px 0; color: #666;">SSH key</td>
     <td style="font-family: monospace; font-size: 13px; word-break: break-all;">{{.Fingerprint}}</td></tr>
 {{if .Comment}}<tr><td style="padding: 6px 12px 6px 0; color: #666;">Key comment</td>
     <td style="font-family: monospace; font-size: 13px;">{{.Comment}}</td></tr>{{end}}
-<tr><td style="padding: 6px 12px 6px 0; color: #666;">Code</td>
+{{end}}<tr><td style="padding: 6px 12px 6px 0; color: #666;">Code</td>
     <td style="font-family: monospace;">{{.UserCode}}</td></tr>
 </table>
 <p style="background: #fff8e1; border-left: 3px solid #f0ad4e; padding: 12px; font-size: 14px;">
-Approving issues a certificate for your principals to the machine holding that SSH key.
+{{if .Audience}}Approving issues an access token that lets the machine holding that key act as you, in the
+role shown, at the service named under Audience. If you did not start this login, or the key
+thumbprint does not match the one printed in your terminal, choose Reject.{{else}}Approving issues a certificate for your principals to the machine holding that SSH key.
 If you did not start this login, or the fingerprint does not match the machine you are
-sitting at, choose Reject.</p>
+sitting at, choose Reject.{{end}}</p>
 <form method="POST" action="/device/approve">
 <input type="hidden" name="user_code" value="{{.UserCode}}">
 <input type="hidden" name="approval_token" value="{{.ApprovalToken}}">
@@ -459,6 +604,7 @@ type devicePromptData struct {
 func renderDevicePrompt(w http.ResponseWriter, status int, userCode, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	denyFraming(w)
 	w.WriteHeader(status)
 	data := devicePromptData{Title: "Authorize a device", UserCode: userCode, Error: errMsg}
 	if err := devicePromptTmpl.Execute(w, data); err != nil {
@@ -475,17 +621,33 @@ type deviceApprovalData struct {
 	Comment       string
 	UserCode      string
 	ApprovalToken string
+	// Audience and Validity are set for token requests only; a non-empty
+	// Audience is what switches the page to its token wording.
+	Audience string
+	Validity string
 }
 
 func renderDeviceApproval(w http.ResponseWriter, req device.Request) {
-	_, comment, err := parseUserPublicKey(req.PubKey)
-	if err != nil {
-		renderDeviceResult(w, http.StatusBadRequest, "Error", "The requested key is not usable.", false)
-		return
+	var comment, validity string
+	if req.Kind == device.KindJWT {
+		cfg := currentConfig()
+		aud, err := cfg.jwtAudience(req.Audience)
+		if err != nil {
+			renderDeviceResult(w, http.StatusForbidden, "Not authorized", err.Error(), false)
+			return
+		}
+		validity = cfg.JWT.validityFor(aud).String()
+	} else {
+		var err error
+		if _, comment, err = parseUserPublicKey(req.PubKey); err != nil {
+			renderDeviceResult(w, http.StatusBadRequest, "Error", "The requested key is not usable.", false)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	denyFraming(w)
 	w.WriteHeader(http.StatusOK)
 	data := deviceApprovalData{
 		Title:         "Approve this device",
@@ -496,6 +658,8 @@ func renderDeviceApproval(w http.ResponseWriter, req device.Request) {
 		Comment:       comment,
 		UserCode:      req.UserCode,
 		ApprovalToken: req.ApprovalToken,
+		Audience:      req.Audience,
+		Validity:      validity,
 	}
 	if err := deviceApprovalTmpl.Execute(w, data); err != nil {
 		log.Printf("Device flow: failed to render approval page: %v", err)
@@ -511,6 +675,7 @@ type deviceResultData struct {
 func renderDeviceResult(w http.ResponseWriter, status int, title, message string, ok bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	denyFraming(w)
 	w.WriteHeader(status)
 	if err := deviceResultTmpl.Execute(w, deviceResultData{Title: title, Message: message, OK: ok}); err != nil {
 		log.Printf("Device flow: failed to render result page: %v", err)
