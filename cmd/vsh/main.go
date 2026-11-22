@@ -175,6 +175,21 @@ vsh() {
                 command vsh logout
             fi
             ;;
+        token)
+            if [ "$2" = "login" ] && [[ " ${@:3} " =~ " --local " ]]; then
+                # Session login - the credential goes into this shell only.
+                # Just stdout is captured: the device code is shown on stderr.
+                local output
+                output=$(command vsh "$@") || return 1
+                eval "$output"
+            elif [ "$2" = "logout" ] && [ -n "$VSH_LOCAL_TOKEN$VSH_LOCAL_TOKEN_KEY" ]; then
+                # Prints an unset command when the session is what is being
+                # logged out of, and nothing otherwise
+                eval "$(command vsh "$@" --eval)"
+            else
+                command vsh "$@"
+            fi
+            ;;
         *)
             # All other commands pass through
             command vsh "$@"
@@ -502,7 +517,8 @@ func openBrowser(url string) {
 	case "windows":
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	default:
-		fmt.Printf("Please open this URL in your browser:\n%s\n", url)
+		// On stderr: a caller may be capturing stdout for eval.
+		fmt.Fprintf(os.Stderr, "Please open this URL in your browser:\n%s\n", url)
 		return
 	}
 	cmd.Run()

@@ -62,6 +62,11 @@ type tokenRecord struct {
 	// mode. Only the path is stored, never its contents.
 	ServiceTokenFile string `json:"service_token_file,omitempty"`
 	AccessToken      string `json:"access_token"`
+
+	// key is set only for a session credential (--local), whose key exists
+	// in memory and in the shell's environment and nowhere else. It is
+	// unexported so that it can never be serialized into a record on disk.
+	key ed25519.PrivateKey
 }
 
 func (r *tokenRecord) expired(margin time.Duration) bool {
@@ -105,7 +110,7 @@ func printTokenUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: vsh token <command> [options]")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Commands:")
-	fmt.Fprintln(os.Stderr, "  login   Obtain an HTTP credential: --audience <name> [--role <role>] [--device]")
+	fmt.Fprintln(os.Stderr, "  login   Obtain an HTTP credential: --audience <name> [--role <role>] [--device] [--local]")
 	fmt.Fprintln(os.Stderr, "  renew   Repeat the login that produced a stored credential")
 	fmt.Fprintln(os.Stderr, "  status  Show stored credentials: audience, role, identity and expiry")
 	fmt.Fprintln(os.Stderr, "  print   Write the raw access token to stdout (for scripting)")
@@ -217,7 +222,17 @@ func listTokens() []*tokenRecord {
 
 // selectToken resolves --audience. It may be omitted when exactly one
 // credential is stored, which is the common case.
+//
+// A session credential in the shell's environment comes first, as a local
+// SSH session does: it is used unless another audience is asked for by name.
 func selectToken(audience string) (*tokenRecord, error) {
+	session, err := sessionToken()
+	if err != nil {
+		return nil, err
+	}
+	if session != nil && (audience == "" || audience == session.Audience) {
+		return session, nil
+	}
 	if audience != "" {
 		return loadToken(audience)
 	}
@@ -279,6 +294,9 @@ type tokenLoginOptions struct {
 	// Renewal sets it: a renewed credential that silently belongs to someone
 	// else is the signature of a login completed by the wrong person.
 	ExpectSubject string
+	// Local asks for a session credential: a key generated for this login,
+	// and nothing written to disk.
+	Local bool
 }
 
 func cmdTokenLogin(args []string) {
@@ -289,6 +307,7 @@ func cmdTokenLogin(args []string) {
 	deviceFlow := fs.Bool("device", false, "Approve from another device instead of a local browser")
 	serviceTokenFile := fs.String("service-token-file", "", "Authenticate as a machine identity with this voussh service token (non-interactive)")
 	keyPath := fs.String("key", "", "Ed25519 private key to bind the token to (default: generated on first use)")
+	local := fs.Bool("local", false, "Keep the token and a one-time key in this shell's environment only; write nothing to disk")
 	fs.Parse(args)
 
 	if *audience == "" {
@@ -296,6 +315,17 @@ func cmdTokenLogin(args []string) {
 	}
 	if *deviceFlow && *serviceTokenFile != "" {
 		fatalf("--device and --service-token-file are mutually exclusive")
+	}
+	if *local {
+		// A session is for a person at a shell. A machine identity renews
+		// itself from its service token, which a session never does; and a
+		// session's key is made for it, not chosen.
+		if *serviceTokenFile != "" || *keyPath != "" {
+			fatalf("--local cannot be combined with --service-token-file or --key")
+		}
+		if err := checkSessionOutput(os.Stdout, args); err != nil {
+			fatalf("%v", err)
+		}
 	}
 
 	opts := tokenLoginOptions{
@@ -313,7 +343,13 @@ func cmdTokenLogin(args []string) {
 		opts.Mode = tokenModeDevice
 	}
 
-	if opts.Mode == tokenModeService {
+	if *local {
+		server, err := sessionLoginServer(opts.Server)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		opts.Server, opts.Local = server, true
+	} else if opts.Mode == tokenModeService {
 		// A machine identity never prompts, and its server is not a choice
 		// to remember on a human's behalf.
 		if opts.Server == "" {
@@ -335,6 +371,11 @@ func cmdTokenLogin(args []string) {
 	if err != nil {
 		fatalf("%v", err)
 	}
+	if rec.session() {
+		// The only thing a --local login writes to stdout, and the only
+		// place the credential goes.
+		fmt.Print(sessionExports(rec))
+	}
 	reportToken(rec)
 }
 
@@ -346,6 +387,9 @@ func cmdTokenRenew(args []string) {
 	old, err := selectToken(*audience)
 	if err != nil {
 		fatalf("%v", err)
+	}
+	if old.session() {
+		fatalf("A session token cannot be renewed: nothing about its login was kept. Log in again: %s", sessionLoginHint(old.Audience))
 	}
 	rec, err := tokenLogin(renewOptions(old))
 	if err != nil {
@@ -368,7 +412,11 @@ func renewOptions(rec *tokenRecord) tokenLoginOptions {
 }
 
 func reportToken(rec *tokenRecord) {
-	fmt.Fprintf(os.Stderr, "Token saved for audience %s\n", rec.Audience)
+	if rec.session() {
+		fmt.Fprintf(os.Stderr, "Session token for audience %s (this shell only; nothing was written to disk)\n", rec.Audience)
+	} else {
+		fmt.Fprintf(os.Stderr, "Token saved for audience %s\n", rec.Audience)
+	}
 	fmt.Fprintf(os.Stderr, "  Identity: %s\n", rec.Subject)
 	fmt.Fprintf(os.Stderr, "  Role:     %s\n", rec.Role)
 	fmt.Fprintf(os.Stderr, "  Expires:  %s (in %s)\n",
@@ -379,12 +427,21 @@ func reportToken(rec *tokenRecord) {
 // back, and stores it.
 func tokenLogin(opts tokenLoginOptions) (*tokenRecord, error) {
 	serverURL = strings.TrimRight(opts.Server, "/")
-	if opts.KeyPath == "" {
-		opts.KeyPath = defaultHTTPKeyPath()
-	}
-	key, err := ensureHTTPKey(opts.KeyPath)
-	if err != nil {
-		return nil, err
+	var key ed25519.PrivateKey
+	var err error
+	if opts.Local {
+		// A key for this one token, never written anywhere by vsh.
+		opts.KeyPath = ""
+		if _, key, err = ed25519.GenerateKey(rand.Reader); err != nil {
+			return nil, fmt.Errorf("failed to generate key: %w", err)
+		}
+	} else {
+		if opts.KeyPath == "" {
+			opts.KeyPath = defaultHTTPKeyPath()
+		}
+		if key, err = ensureHTTPKey(opts.KeyPath); err != nil {
+			return nil, err
+		}
 	}
 	pub := key.Public().(ed25519.PublicKey)
 
@@ -432,6 +489,10 @@ func tokenLogin(opts tokenLoginOptions) (*tokenRecord, error) {
 		Mode:             opts.Mode,
 		ServiceTokenFile: opts.ServiceTokenFile,
 		AccessToken:      token,
+	}
+	if opts.Local {
+		rec.key = key
+		return rec, nil
 	}
 	if err := saveToken(rec); err != nil {
 		return nil, fmt.Errorf("failed to save token: %w", err)
@@ -740,14 +801,26 @@ func cmdTokenStatus(args []string) {
 	audience := fs.String("audience", "", "Show only this audience")
 	fs.Parse(args)
 
+	// The session credential, if this shell has one, is listed first: it is
+	// the one that will be used.
+	session, err := sessionToken()
+	if err != nil {
+		fatalf("%v", err)
+	}
 	var recs []*tokenRecord
-	if *audience != "" {
+	switch {
+	case session != nil && (*audience == "" || *audience == session.Audience):
+		recs = []*tokenRecord{session}
+		if *audience == "" {
+			recs = append(recs, listTokens()...)
+		}
+	case *audience != "":
 		rec, err := loadToken(*audience)
 		if err != nil {
 			fatalf("%v", err)
 		}
 		recs = []*tokenRecord{rec}
-	} else {
+	default:
 		recs = listTokens()
 	}
 	if len(recs) == 0 {
@@ -762,9 +835,17 @@ func cmdTokenStatus(args []string) {
 		fmt.Printf("Audience: %s\n", rec.Audience)
 		fmt.Printf("Identity: %s\n", rec.Subject)
 		fmt.Printf("Role: %s\n", rec.Role)
-		fmt.Printf("Issuer: %s (via %s, %s)\n", rec.Issuer, rec.Server, rec.Mode)
-		fmt.Printf("Key: %s (%s)\n", rec.KeyThumbprint, rec.KeyPath)
-		if rec.expired(0) {
+		if rec.session() {
+			fmt.Printf("Issuer: %s (session: this shell only, nothing on disk)\n", rec.Issuer)
+			fmt.Printf("Key: %s (in the environment)\n", rec.KeyThumbprint)
+		} else {
+			fmt.Printf("Issuer: %s (via %s, %s)\n", rec.Issuer, rec.Server, rec.Mode)
+			fmt.Printf("Key: %s (%s)\n", rec.KeyThumbprint, rec.KeyPath)
+		}
+		if rec.expired(0) && rec.session() {
+			fmt.Printf("Expired: %s. Log in again: %s\n",
+				rec.ExpiresAt.Local().Format("15:04:05 on Jan 2"), sessionLoginHint(rec.Audience))
+		} else if rec.expired(0) {
 			fmt.Printf("Expired: %s. Run: vsh token renew --audience %s\n",
 				rec.ExpiresAt.Local().Format("15:04:05 on Jan 2"), rec.Audience)
 		} else {
@@ -784,6 +865,11 @@ func usableToken(audience string) (*tokenRecord, error) {
 	// A token about to expire would be refused by the time it arrives.
 	if !rec.expired(10 * time.Second) {
 		return rec, nil
+	}
+	if rec.session() {
+		// Renewing would take a new login, and that takes a human.
+		return nil, fmt.Errorf("the session token for audience %q expired at %s. Log in again: %s",
+			rec.Audience, rec.ExpiresAt.Local().Format("15:04:05 on Jan 2"), sessionLoginHint(rec.Audience))
 	}
 	if rec.Mode == tokenModeService {
 		renewed, err := tokenLogin(renewOptions(rec))
@@ -828,7 +914,7 @@ func cmdTokenProof(args []string) {
 	if err != nil {
 		fatalf("%v", err)
 	}
-	key, err := keyfile.LoadPrivate(rec.KeyPath)
+	key, err := rec.privateKey()
 	if err != nil {
 		fatalf("failed to load key: %v", err)
 	}
@@ -847,7 +933,23 @@ func cmdTokenLogout(args []string) {
 	fs := flag.NewFlagSet("token logout", flag.ExitOnError)
 	audience := fs.String("audience", "", "Audience to remove")
 	all := fs.Bool("all", false, "Remove every stored credential")
+	evalMode := fs.Bool("eval", false, "Print the shell command that ends a --local session, for eval")
 	fs.Parse(args)
+
+	// A session credential is not vsh's to remove: it sits in the parent
+	// shell's environment. --eval prints the command that removes it;
+	// otherwise the user is told how.
+	if hasSessionVariables() && (*all || sessionTargeted(*audience)) {
+		if *evalMode {
+			fmt.Println(sessionUnset())
+			fmt.Fprintln(os.Stderr, "Session token removed from this shell")
+		} else {
+			explainSessionLogout()
+		}
+		if !*all {
+			return
+		}
+	}
 
 	var recs []*tokenRecord
 	switch {

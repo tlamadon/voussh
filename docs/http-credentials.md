@@ -434,6 +434,7 @@ has dropped the key, tokens forged with it are accepted there.
 
 ```bash
 vsh token login --audience secret-broker [--role admin] [--device] [--server URL]
+vsh token login --local ...      # this shell only: nothing written to disk (see below)
 vsh token status                 # audience, identity, role, expiry — never the token
 vsh token renew                  # repeat the same login
 vsh token logout [--all]
@@ -469,6 +470,76 @@ human, so `vsh http` (and `print`, `proof`) renew an expired token
 transparently. For a browser or device login they stop and tell you to run
 `vsh token renew`.
 
+**Session-only credentials (`--local`).** On a machine where nothing should be
+left behind — no SSH key of yours on it, a borrowed host, a throwaway
+container — `--local` keeps the credential in the current shell instead of on
+disk. It is the counterpart of `vsh login --local` and works the same way:
+
+```bash
+eval "$(vsh init)"      # the vsh shell function; once per shell, or in your profile
+vsh token login --local --device --server https://auth.example.com --audience secret-broker
+vsh http https://broker.example.com/v1/secrets/db-password
+vsh token logout        # or simply close the shell
+```
+
+Without the shell function, the login is
+`eval "$(vsh token login --local …)"` and the logout is
+`eval "$(vsh token logout --eval)"`.
+
+What happens:
+
+- `vsh` generates a new Ed25519 key for this login. It is used for this one
+  token and never again.
+- After approval, `vsh` prints two `export` lines on stdout and the shell
+  evaluates them: `VSH_LOCAL_TOKEN` (the access token) and
+  `VSH_LOCAL_TOKEN_KEY` (the key). Stdout carries nothing else; the device
+  code and every other message go to stderr, so they stay on screen while
+  stdout is being captured.
+- Nothing is written to disk: no key, no token, no server history, not even
+  the config directory. For the same reason a `--local` login never asks
+  which server to use or remembers one — pass `--server`, or have
+  `VSH_SERVER` or a saved server already.
+- If stdout is a terminal, the login is refused before it starts: printing
+  the exports there would put the token and key on screen.
+- `vsh http`, `vsh token print`, `vsh token proof` and `vsh token status` run
+  from that shell use the session credential. It takes precedence over a
+  stored credential for the same audience; `--audience <other>` still reaches
+  the stored ones. A shell holds one session credential: a second `--local`
+  login replaces the first.
+- It works with the device flow and the browser flow. It cannot be combined
+  with `--service-token-file` or `--key`.
+
+Who can read the credential:
+
+- **Every process started from that shell.** Environment variables are
+  inherited, so each command you run there, and whatever it starts, receives
+  a copy of the token and the key.
+- **Any process running as the same user, and root.** On Linux a process's
+  environment is readable by its owner through `/proc/<pid>/environ`. This is
+  the same boundary that protects the 0600 files of the default mode: the
+  difference is not who can read the credential but how easily it travels.
+  Environments get printed — by `env`, debug output, crash reports, CI logs,
+  or `set -x` while the exports are evaluated.
+- Not shell history and not the process list: the exports reach the shell
+  through a pipe, and `export` is a shell builtin with no arguments visible to
+  other processes. Do not redirect the output of `--local` to a file.
+
+How the session ends:
+
+- When the shell exits, or when the variables are unset: `vsh token logout`
+  with the shell function, `eval "$(vsh token logout --eval)"` without it, or
+  `unset VSH_LOCAL_TOKEN VSH_LOCAL_TOKEN_KEY`. A plain `vsh token logout`
+  without the function can only tell you this — a program cannot change its
+  parent shell's environment.
+- Unsetting does not reach copies already inherited by running processes, and
+  it does not revoke anything: the token stays valid until it expires (15
+  minutes by default). The key signs nothing else, so after that it is worth
+  nothing.
+- When the token expires, `vsh http`, `print` and `proof` fail with a message
+  telling you to log in again. There is no renewal — `vsh token renew` refuses
+  a session credential — because nothing about the login was kept and the
+  device flow needs a person. A new login is a new key.
+
 **Requests.** `vsh http` sends one request with
 `Authorization: DPoP <token>` and a fresh `DPoP` proof for that method and
 URL:
@@ -500,8 +571,10 @@ curl -H "Authorization: DPoP $(vsh token print)" \
 
 A proof is single-use: generate a new one per request. Nothing in `vsh`
 accepts a token as an argument, prints one unprompted, or writes one to a
-log, so tokens do not end up in shell history by accident; the command above
-is the one place you choose otherwise.
+log, so tokens do not end up in shell history by accident. A token leaves
+`vsh` in exactly two ways, both of which you ask for: `vsh token print`, and
+the exports of a `--local` login, which go to a shell and are refused on a
+terminal.
 
 ## Offline verification contract
 
@@ -708,7 +781,9 @@ client's private key, so a token captured from a log, a proxy or a browser
 history cannot be used by itself. An attacker who can read
 `~/.config/voussh/http_ed25519` can use the token until it expires and — if
 they can also get through a login — obtain more. Protect that file as you
-would an SSH key.
+would an SSH key. A `--local` session holds its key in the shell's
+environment instead, next to the token: anything that captures that
+environment has both, for as long as the token lasts.
 
 **The browser flow delivers the token in a `localhost` redirect URL**, as the
 certificate flow does for certificates. It can therefore appear in local

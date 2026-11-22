@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/tlamadon/voussh/httpcred"
-	"github.com/tlamadon/voussh/internal/keyfile"
 )
 
 // headerList collects repeated -H flags.
@@ -32,7 +31,7 @@ func (h *headerList) Set(v string) error { *h = append(*h, v); return nil }
 
 func cmdHTTP(args []string) {
 	fs := flag.NewFlagSet("http", flag.ExitOnError)
-	audience := fs.String("audience", "", "Credential to use (optional when only one is stored)")
+	audience := fs.String("audience", "", "Credential to use (optional when only one is stored, or a --local session is active)")
 	var method, data, output string
 	var headers headerList
 	var include bool
@@ -86,7 +85,7 @@ func cmdHTTP(args []string) {
 	if err != nil {
 		fatalf("%v", err)
 	}
-	key, err := keyfile.LoadPrivate(rec.KeyPath)
+	key, err := rec.privateKey()
 	if err != nil {
 		fatalf("failed to load key: %v", err)
 	}

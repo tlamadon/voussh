@@ -770,6 +770,50 @@ curl -H "Authorization: DPoP $TOKEN" -H "DPoP: $PROOF" "$URL"        # 401: proo
 `vsh http`. Nothing else prints a token, and no command accepts one as an
 argument.
 
+#### A session that leaves nothing on disk
+
+On a machine you do not want to leave a key on — one without your SSH key, a
+borrowed host, a container — add `--local`. A new key is generated for that
+login, and the token and key are kept in the current shell's environment
+instead of under `~/.config/voussh`:
+
+```bash
+eval "$(vsh init)"      # the vsh shell function, if it is not in your profile
+vsh token login --local --device --server https://auth.example.com --audience secret-broker
+```
+
+```
+To authorize this machine, open this page on any device:
+
+    https://auth.example.com/device
+
+and enter the code:
+
+    WDJB-MJHT
+
+Session token for audience secret-broker (this shell only; nothing was written to disk)
+  Identity: alice@example.com
+  Role:     default
+  Expires:  14:32:10 on Nov 21 (in 15m0s)
+```
+
+```bash
+vsh http https://broker.example.com/v1/secrets/db-password   # works in this shell
+vsh token logout                                             # or close the shell
+```
+
+It is the same mechanism as `vsh login --local`. Without the shell function,
+use `eval "$(vsh token login --local …)"`; run directly on a terminal, the
+command refuses rather than print the credential.
+
+The trade-off is where the credential lives. As environment variables
+(`VSH_LOCAL_TOKEN`, `VSH_LOCAL_TOKEN_KEY`) it is inherited by every program
+started from that shell and readable by any process of the same user. It ends
+when the shell exits or the variables are unset; the token itself remains
+valid until it expires. When it does, `vsh http` tells you to log in again —
+a session is never renewed silently.
+[Details](docs/http-credentials.md#the-client-vsh-token-and-vsh-http).
+
 #### Agents and other machine identities
 
 A daemon authenticates with a voussh service token, as it does for
