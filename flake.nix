@@ -274,7 +274,7 @@
         packages = {
           voussh = buildGoApplication {
             pname = "voussh";
-            version = "0.3.0";
+            version = "0.3.1";
             src = ./.;
             pwd = ./.;
 
@@ -293,7 +293,7 @@
 
           vsh = buildGoApplication {
             pname = "vsh";
-            version = "0.3.0";
+            version = "0.3.1";
             src = ./.;
             pwd = ./.;
 
